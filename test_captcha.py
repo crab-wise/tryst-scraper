@@ -17,12 +17,21 @@ def main():
     print("CAPTCHA Solving Test for Tryst.link")
     print("=" * 60)
     
+    # Parse arguments
+    import sys
+    prevent_focus = "--visible" not in sys.argv
+    
     # Display configured API key (masked for security)
     print("\nConfigured API Key:")
     print(f"2Captcha: {'*' * (len(TWOCAPTCHA_API_KEY) - 8) + TWOCAPTCHA_API_KEY[-8:]}")
     
     print("\nInitializing Chrome driver...")
-    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
+    if prevent_focus:
+        print("Using enhanced visibility headless mode (won't steal focus)")
+        driver = initialize_driver(headless=False, prevent_focus=True)
+    else:
+        print("Using fully visible browser mode (may steal focus)")
+        driver = initialize_driver(headless=False, prevent_focus=False)
     
     try:
         # First test: Direct access to search page (which often has CAPTCHA)

@@ -230,6 +230,7 @@ def print_usage():
     print("  --url=URL       Scrape a single profile URL")
     print("  --file=FILE     Scrape profiles from a file (default: profile_urls.txt)")
     print("  --limit=N       Limit the number of profiles to scrape")
+    print("  --visible       Use fully visible browser (may steal focus)")
     print("  --help          Show this help message")
 
 def main():
@@ -242,6 +243,7 @@ def main():
     url = None
     url_file = "profile_urls.txt"
     limit = None
+    prevent_focus = True
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
@@ -256,6 +258,19 @@ def main():
                 print(f"Invalid limit: {arg}")
                 print_usage()
                 return
+        elif arg == "--visible":
+            prevent_focus = False
+            print("Using fully visible browser mode (may steal focus)")
+    
+    # Override the initialize_driver function to use our focus prevention setting
+    from profile_finder import initialize_driver as original_init_driver
+    
+    # Create a custom initializer that uses our prevent_focus setting
+    def custom_init_driver(headless=False, prevent_focus=prevent_focus):
+        return original_init_driver(headless=headless, prevent_focus=prevent_focus)
+    
+    # Replace the imported function with our custom one
+    globals()['initialize_driver'] = custom_init_driver
     
     # Run the scraper
     if url:

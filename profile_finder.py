@@ -28,21 +28,22 @@ TWOCAPTCHA_API_KEY = "47c255be6d47c6761bd1db4141b5c8a4"
 def initialize_driver(headless=False, prevent_focus=True):
     """Set up Chrome WebDriver with anti-detection options."""
     options = Options()
-    if headless:
+    
+    # For macOS, the most effective way to prevent focus stealing is to use a special
+    # variant of headless mode that still renders pages but doesn't have a window
+    if prevent_focus:
+        # This is a headless mode that renders properly but doesn't steal focus
+        options.add_argument("--headless=new")
+        # These ensure proper rendering in headless mode
+        options.add_argument("--window-size=1920,1080")  
+        options.add_argument("--disable-gpu")
+        options.add_argument("--enable-javascript")
+        # Let the user know we're using "enhanced visibility headless" mode
+        print("Using enhanced visibility headless mode (pages render but won't steal focus)")
+    elif headless:
+        # Traditional headless mode if specifically requested
         options.add_argument("--headless")
-        
-    # Non-headless mode but prevent focus stealing
-    if prevent_focus and not headless:
-        # Prevent browser from stealing focus
-        options.add_argument("--disable-infobars")
-        options.add_argument("--disable-notifications")
-        
-        # MacOS specific focus prevention
-        options.add_argument("--disable-desktop-notifications")
-        
-        # Start browser minimized - this helps prevent focus stealing
-        options.add_argument("--start-minimized") 
-        
+    
     options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -769,8 +770,9 @@ def print_usage():
     print("Usage:")
     print("  python profile_finder.py [OPTIONS]")
     print("Options:")
-    print("  --start-page=N   Start processing from page N (default: 1)")
-    print("  --help           Show this help message")
+    print("  --start-page=N    Start processing from page N (default: 1)")
+    print("  --visible         Use fully visible browser (may steal focus)")
+    print("  --help            Show this help message")
 
 def main():
     """Run the profile finder with automated CAPTCHA solving."""
@@ -784,6 +786,8 @@ def main():
     
     # Default start page
     start_page = 1
+    # Default to prevent focus stealing
+    prevent_focus = True
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
@@ -796,13 +800,16 @@ def main():
             except ValueError:
                 print(f"Invalid start page: {arg}. Using default (1).")
                 start_page = 1
+        elif arg == "--visible":
+            prevent_focus = False
+            print("Using fully visible browser mode (may steal focus)")
     
     print("Starting Tryst.link Profile Finder with automated CAPTCHA solving...")
     print(f"2Captcha API Key: {'*' * (len(TWOCAPTCHA_API_KEY) - 8) + TWOCAPTCHA_API_KEY[-8:]}")
     if start_page > 1:
         print(f"Starting from page {start_page}")
     
-    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
+    driver = initialize_driver(headless=False, prevent_focus=prevent_focus)  # Use headless=new by default to prevent focus stealing
     
     try:
         # Generate the starting page URL if not starting from page 1
