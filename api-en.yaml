@@ -1,0 +1,349 @@
+openapi: 3.1.0
+info:
+  title: capsolver-api
+  description: ''
+  version: 1.0.0
+tags: []
+paths:
+  /createTask:
+    post:
+      summary: CreateTask
+      deprecated: false
+      description: |-
+        Creates a task for solving selected captcha type.
+
+        Specify which type of captchas in the parameter.
+
+        For example：**ImageToTextTask**
+
+        You can [View all supported task types](/guide/api-support)
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientKey:
+                  type: string
+                  description: Client account key, can be found in dashboard
+                appId:
+                  type: string
+                  description: Your Developer appId, Apply in dashboard’s developer section
+                task:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    body:
+                      type: string
+                  required:
+                    - type
+                    - body
+                  description: Task object
+                callbackUrl:
+                  type: string
+                  description: token will send (post) to this endpoint
+              required:
+                - clientKey
+                - task
+            example:
+              clientKey: YOUR_API_KEY
+              appId: APP_ID
+              task:
+                type: ImageToTextTask
+                body: BASE64 image
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorId:
+                    type: integer
+                    description: |-
+                      Error message: 
+                      <br>
+                      0 - no error 
+                      <br>
+                      1 - with error
+                  errorCode:
+                    type: string
+                    description: '[errorCode: full list of errors](/guide/api-error)'
+                  errorDescription:
+                    type: string
+                    description: Error description
+                  status:
+                    type: string
+                    description: returns the status, which can only be null or ready
+                  solution:
+                    type: string
+                    description: The synchronization task returns a result
+                  taskId:
+                    type: string
+                    description: >-
+                      ID of the created task, [Get Task
+                      results](/guide/api-gettaskresult)
+              examples:
+                '1':
+                  summary: asynchronous task response
+                  value:
+                    errorId: 0
+                    errorCode: ''
+                    errorDescription: ''
+                    taskId: 37223a89-06ed-442c-a0b8-22067b79c5b4
+                '2':
+                  summary: Synchronous task response
+                  value:
+                    errorId: 0
+                    errorCode: ''
+                    errorDescription: ''
+                    status: ready
+                    solution:
+                      text: 44795sds
+                    taskId: 2376919c-1863-11ec-a012-94e6f7355a0b
+      security: []
+  /getTaskResult:
+    post:
+      summary: GetTaskResult
+      deprecated: false
+      description: |-
+        When the task initiated by [createTask](/guide/api-createtask) is an
+        asynchronous task, get the asynchronous task result
+
+        through getTaskResult.
+
+        -- The maximum number of query requests for each task is 120. When the
+        number of query requests exceeds, the task results will be lost 
+        <br>
+        -- Each task can be queried within 5 minutes after it is created, and
+        will be lost after the time exceeds 
+        <br>
+        -- The recognition result obtained by this method, depending on the
+        system load, you will get the result within a time interval of 1s to
+        30s. 
+        <br>
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientKey:
+                  type: string
+                  description: >-
+                    Client account key, can be found
+                    [here](https://dashboard.capsolver.com)
+                taskId:
+                  type: string
+                  description: >-
+                    ID created by the [createTask method
+                    ](/guide/api-createtask)
+              required:
+                - clientKey
+                - taskId
+            example:
+              clientKey: YOUR_API_KEY
+              taskId: 37223a89-06ed-442c-a0b8-22067b79c5b4
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorId:
+                    type: integer
+                    description: |-
+                      Error message: 
+                      <br>
+                      0 - no error 
+                      <br>
+                      1 - with error
+                  errorCode:
+                    type: string
+                    description: '[errorCode: full list of errors](/guide/api-error)'
+                  errorDescription:
+                    type: string
+                    description: Error Description
+                  status:
+                    type: string
+                    description: >-
+                      • idle - Waiting • processing - Under identification •
+                      ready - The identification is complete and the result is
+                      found in the solution parameter
+              examples:
+                '1':
+                  summary: Success Examples
+                  value:
+                    errorId: 0
+                    solution:
+                      userAgent: xxx
+                      gRecaptchaResponse: >-
+                        03AGdBq25SxXT-pmSeBXjzScW-EiocHwwpwqtk1QXlJnGnUJCZrgjwLLdt7cb0...
+                    status: ready
+      security: []
+  /getBalance:
+    post:
+      summary: GetBalance
+      deprecated: false
+      description: >-
+        Retrieve an account balance with its account key, Convenient to do your
+        own alarm and query.
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientKey:
+                  type: string
+                  description: >-
+                    Client account key, can be found
+                    [here](https://dashboard.capsolver.com)
+              required:
+                - clientKey
+            example:
+              clientKey: YOUR_API_KEY
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorId:
+                    type: integer
+                    description: |-
+                      Error message: 
+                      <br>
+                      0 - no error 
+                      <br>
+                      1 - with error
+                  errorCode:
+                    type: string
+                    description: '[errorCode: full list of errors](/guide/api-error)'
+                  errorDescription:
+                    type: string
+                    description: Short description of the error
+                  balance:
+                    type: integer
+                    description: Account balance value in USD
+                  packages:
+                    type: array
+                    items:
+                      type: object
+                      properties: {}
+                    description: Monthly/Weekly Packages
+              examples:
+                '1':
+                  summary: Success Examples
+                  value:
+                    errorId: 0
+                    balance: 1234567
+                    packages:
+                      - packageId: 12327bff7f703e135e7379kf
+                        type: 2
+                        numberOfCalls: 1234567
+                        status: 1
+                        token: CAP-1234567C19044AF7351B31EC12345678
+                        activeTime: 1699804511
+                        expireTime: 1702896511
+      security: []
+  /feedbackTask:
+    post:
+      summary: FeedbackTask
+      deprecated: false
+      description: >-
+        We rely on reports to automatically analyze the quality of tokens issued
+        by our API. These reports are processed automatically, and our team
+        takes proactive steps to enhance token quality, such as updating the
+        system for new tasks, improving grids, and more.
+      tags: []
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clientKey:
+                  type: string
+                  description: Client account key, can be found in dashboard
+                appId:
+                  type: string
+                  description: Your Developer appId, Apply in dashboard’s developer section
+                taskId:
+                  type: string
+                  description: Your task id
+                result:
+                  type: object
+                  properties:
+                    invalid:
+                      type: boolean
+                      description: true or false
+                    code:
+                      type: string
+                      description: code of task result
+                    message:
+                      type: string
+                      description: invalid token messages
+                  description: Task result object
+                  required:
+                    - invalid
+                    - message
+              required:
+                - clientKey
+                - result
+                - taskId
+            example:
+              clientKey: YOUR_API_KEY
+              appId: APP_ID
+              taskId: $taskId
+              result:
+                invalid: true
+                code: 1001
+                message: invalid token
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorId:
+                    type: string
+                    description: |-
+                      Error message: 
+                      <br>
+                      0 - no error 
+                      <br>
+                      1 - with error
+                  errorCode:
+                    type: string
+                    description: '[errorCode: full list of errors](/guide/api-error)'
+                  errorDescription:
+                    type: string
+                    description: Error description
+                  message:
+                    type: string
+                    description: returns the messages
+      security: []
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://api.capsolver.com/
+    description: Server-A
+  - url: https://api-stable.capsolver.com
+    description: Server-B
