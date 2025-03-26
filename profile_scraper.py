@@ -151,7 +151,7 @@ def scrape_single_profile(url):
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False)
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
     initialize_csv()
     
     try:
@@ -193,7 +193,7 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None):
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False)
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
     initialize_csv()
     
     try:

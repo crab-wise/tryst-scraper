@@ -22,7 +22,7 @@ def main():
     print(f"2Captcha: {'*' * (len(TWOCAPTCHA_API_KEY) - 8) + TWOCAPTCHA_API_KEY[-8:]}")
     
     print("\nInitializing Chrome driver...")
-    driver = initialize_driver(headless=False)  # Use visible browser for CAPTCHA testing
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
     
     try:
         # First test: Direct access to search page (which often has CAPTCHA)

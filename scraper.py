@@ -18,15 +18,35 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # Your CAPTCHA solving service API key
 TWOCAPTCHA_API_KEY = "47c255be6d47c6761bd1db4141b5c8a4"
 
-def initialize_driver(headless=False):
+def initialize_driver(headless=False, prevent_focus=True):
     """Set up Chrome WebDriver with anti-detection options."""
     options = Options()
     if headless:
         options.add_argument("--headless")
+        
+    # Non-headless mode but prevent focus stealing
+    if prevent_focus and not headless:
+        # Prevent browser from stealing focus
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-notifications")
+        
+        # MacOS specific focus prevention
+        options.add_argument("--disable-desktop-notifications")
+        
+        # Start browser minimized - this helps prevent focus stealing
+        options.add_argument("--start-minimized") 
+        
     options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+    
+    # Disable various prompts and popups that could steal focus
+    options.add_experimental_option("prefs", {
+        "profile.default_content_setting_values.notifications": 2,  # Block notifications
+        "credentials_enable_service": False,  # Disable password manager
+        "profile.password_manager_enabled": False  # Disable password manager
+    })
     
     # Try multiple methods to initialize Chrome driver
     try:
@@ -499,7 +519,7 @@ def save_to_csv(data, filename="profiles.csv"):
 
 def main():
     """Run the scraper."""
-    driver = initialize_driver(headless=False)  # Non-headless for CAPTCHA visibility
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
     initialize_csv()
     scraped_urls = load_scraped_urls()
     
