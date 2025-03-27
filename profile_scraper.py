@@ -305,7 +305,7 @@ def scrape_single_profile(url):
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False, prevent_focus=False)  # Fully visible browser with no focus prevention
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Invisible mode that prevents focus stealing
     initialize_csv()
     
     try:
@@ -350,7 +350,7 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0)
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False, prevent_focus=False)  # Fully visible browser with no focus prevention
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Invisible mode that prevents focus stealing
     initialize_csv()
     
     # Create a file to track progress
@@ -420,6 +420,7 @@ def print_usage():
     print("  --limit=N          Limit the number of profiles to scrape")
     print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
     print("  --visible          Use fully visible browser (may steal focus)")
+    print("  --invisible        Use invisible browser (default, prevents focus stealing)")
     print("  --reset            Reset progress and start fresh (clears profile_data.csv and scraped_urls.txt)")
     print("  --help             Show this help message")
 
@@ -453,7 +454,7 @@ def main():
     url_file = "profile_urls.txt"
     limit = None
     start_index = 0
-    prevent_focus = True
+    prevent_focus = True  # Default to invisible mode
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
@@ -480,6 +481,9 @@ def main():
         elif arg == "--visible":
             prevent_focus = False
             print("Using fully visible browser mode (may steal focus)")
+        elif arg == "--invisible":
+            prevent_focus = True
+            print("Using invisible browser mode (prevents focus stealing)")
     
     # Override the initialize_driver function to use our focus prevention setting
     from profile_finder import initialize_driver as original_init_driver
