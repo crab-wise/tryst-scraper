@@ -73,6 +73,95 @@ from profile_finder import (
     TWOCAPTCHA_API_KEY
 )
 
+# Bright Data Web Unlocker API configuration
+BRIGHT_DATA_API_TOKEN = "7790cf0b2613fd83bfc7205d35cb1eb449b437602863b8dad23ceb67a2cb5fd4"
+BRIGHT_DATA_ZONE = "web_unlocker1"
+BRIGHT_DATA_API_URL = "https://api.brightdata.com/request"
+
+def fetch_with_bright_data(url):
+    """
+    Fetch a URL using Bright Data's Web Unlocker API.
+    
+    This bypasses all rate limits, CAPTCHAs, and other blocking mechanisms
+    by using Bright Data's proxy infrastructure.
+    
+    Args:
+        url: The URL to fetch
+        
+    Returns:
+        tuple: (success, html_content)
+            - success: Boolean indicating if the request was successful
+            - html_content: The HTML content of the page if successful, error message otherwise
+    """
+    import requests
+    import json
+    import time
+    
+    print(f"\n{'='*80}")
+    print(f"🌐 Fetching via Bright Data Web Unlocker API: {url}")
+    print(f"{'='*80}")
+    
+    # Set up headers with authorization token
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {BRIGHT_DATA_API_TOKEN}"
+    }
+    
+    # Prepare the payload
+    payload = {
+        "zone": BRIGHT_DATA_ZONE,
+        "url": url,
+        "format": "raw"  # Get raw HTML response
+    }
+    
+    # Track timing
+    start_time = time.time()
+    
+    try:
+        # Make the request to Bright Data
+        response = requests.post(
+            BRIGHT_DATA_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=60  # Increased timeout for Bright Data processing
+        )
+        
+        # Log completion time
+        request_time = time.time() - start_time
+        print(f"⏱️ Bright Data request completed in {request_time:.2f} seconds")
+        
+        # Check if request was successful
+        if response.status_code == 200:
+            # Get the HTML content
+            html_content = response.text
+            
+            # Check if there are error indicators in the content
+            if "HTTP ERROR 440" in html_content:
+                print("⚠️ Bright Data request returned HTTP ERROR 440 (rate limited)")
+                return False, "HTTP ERROR 440 - Rate limited"
+                
+            # Check for other common errors
+            if "This page isn't working" in html_content:
+                print("⚠️ Bright Data request returned 'This page isn't working'")
+                return False, "Page isn't working"
+                
+            # If we got here, it was successful
+            print(f"✅ Successfully fetched page via Bright Data ({len(html_content)} bytes)")
+            return True, html_content
+            
+        else:
+            # Log the error
+            print(f"❌ Bright Data API error: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False, f"API Error: {response.status_code} - {response.text}"
+            
+    except Exception as e:
+        # Log the exception
+        print(f"❌ Exception during Bright Data API request: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, f"Exception: {str(e)}"
+
 def scrape_profile(driver, url):
     """Scrape a profile, revealing all hidden information and collecting all contact details."""
     import time as timing_module  # For performance measurement
@@ -1194,39 +1283,158 @@ def optimize_driver_settings(driver):
     
     return driver
 
-def scrape_profile_worker(url, use_visible_browser=False):
-    """Worker function for parallel processing to scrape a single profile."""
-    # Create a new driver instance for this thread
-    driver = initialize_driver(headless=False, prevent_focus=(not use_visible_browser))
+def scrape_profile_with_bright_data(url):
+    """
+    Scrape a profile using Bright Data's Web Unlocker API.
+    This approach avoids the need for a local browser and handles all CAPTCHAs and rate limiting.
+    """
+    import time
+    from bs4 import BeautifulSoup
     
+    print(f"\n{'='*80}")
+    print(f"📄 Scraping profile with Bright Data: {url}")
+    print(f"{'='*80}")
+    
+    # Initialize data dictionary
+    data = {
+        "url": url,
+        "name": None,
+        "email": None,
+        "phone": None,
+        "mobile": None,
+        "whatsapp": None,
+        "linktree": None,
+        "website": None,
+        "onlyfans": None,
+        "fansly": None,
+        "twitter": None,
+        "instagram": None,
+        "snapchat": None,
+        "telegram": None
+    }
+    
+    # Fetch page content using Bright Data API
+    success, html_content = fetch_with_bright_data(url)
+    
+    if not success:
+        print(f"❌ Failed to fetch profile page: {html_content}")
+        data["_error"] = html_content
+        return data
+    
+    # Parse HTML with BeautifulSoup for easier data extraction
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Extract profile name
     try:
-        # Check if already scraped (memory cached version for speed)
+        # Try to find profile name in h1/h2 elements
+        name_element = soup.select_one('h1, h2, h3')
+        if name_element and name_element.text.strip():
+            data["name"] = name_element.text.strip()
+            print(f"✅ Found profile name: {data['name']}")
+    except Exception as e:
+        print(f"Error extracting profile name: {e}")
+    
+    # Extract contact links
+    try:
+        # Find all contact information rows
+        contact_rows = soup.select("ul.list-style-none.bg-light.p-3.rounded div.row.justify-content-between")
+        
+        for row in contact_rows:
+            try:
+                # Get label and value
+                label_element = row.select_one("div.col-auto.fw-bold")
+                value_element = row.select_one("div.col-auto.text-end")
+                
+                if not label_element or not value_element:
+                    continue
+                
+                # Extract label and normalize it
+                label = label_element.text.strip().lower()
+                if "formerly twitter" in label:
+                    label = "twitter"
+                
+                # Extract value from visible elements or links
+                value = None
+                
+                # First check for visible text that's not hidden
+                span = value_element.select_one("span[data-unobfuscate-details-target='output']")
+                if span and "●" not in span.text:
+                    value = span.text.strip()
+                
+                # If no value found yet, look for links for social media
+                if not value:
+                    link = value_element.select_one("a")
+                    if link and not label.startswith(('email', 'phone', 'mobile', 'whatsapp')):
+                        value = link.get('href')
+                
+                # Map to our data structure if label matches
+                if value:
+                    field_mapping = {
+                        "email": "email",
+                        "mobile": "mobile", 
+                        "phone": "phone",
+                        "whatsapp": "whatsapp",
+                        "twitter": "twitter",
+                        "x": "twitter",  # Handle "X (formerly Twitter)" case
+                        "instagram": "instagram",
+                        "linktree": "linktree",
+                        "onlyfans": "onlyfans",
+                        "fansly": "fansly", 
+                        "snapchat": "snapchat",
+                        "telegram": "telegram",
+                        "website": "website"
+                    }
+                    
+                    for key, field in field_mapping.items():
+                        if key in label:
+                            data[field] = value
+                            print(f"✅ Found {field}: {value}")
+                            break
+                    
+            except Exception as e:
+                print(f"Error processing contact row: {e}")
+    
+        # As fallback, scan for social media links throughout the page
+        for platform, field in [
+            ("onlyfans.com", "onlyfans"),
+            ("twitter.com", "twitter"),
+            ("x.com", "twitter"),
+            ("instagram.com", "instagram"),
+            ("fansly.com", "fansly"),
+            ("linktree", "linktree"),
+            ("snapchat.com", "snapchat"),
+            ("t.me", "telegram")
+        ]:
+            if not data[field]:  # Only look if we didn't already find it
+                links = soup.select(f"a[href*='{platform}']")
+                if links:
+                    data[field] = links[0].get('href')
+                    print(f"✅ Found {field} (fallback method): {data[field]}")
+                    
+    except Exception as e:
+        print(f"Error extracting contact information: {e}")
+    
+    return data
+
+def scrape_profile_worker(url, use_visible_browser=False):
+    """Worker function for parallel processing to scrape a single profile using Bright Data."""
+    try:
+        # Check if already scraped
         scraped_urls = load_scraped_urls()
         if url in scraped_urls:
             print(f"Profile {url} has already been scraped. Skipping.")
-            driver.quit()
             return None
         
-        # Apply performance optimizations to driver
-        optimize_driver_settings(driver)
+        # Add a small delay between workers to avoid overloading the API
+        time.sleep(random.uniform(0.1, 0.5))
         
-        # Use the adaptive delay system based on global rate limiting state
-        worker_delay = get_adaptive_delay()
-        print(f"Worker using adaptive delay of {worker_delay:.2f}s before starting...")
-        time.sleep(worker_delay)
+        # Scrape the profile using Bright Data
+        data = scrape_profile_with_bright_data(url)
         
-        # Scrape the profile
-        data = scrape_profile(driver, url)
-        
-        # Check if we got valid data or if it was a rate-limited error
-        if data and data.get("_error") and "HTTP ERROR 440" in data.get("_error"):
-            print(f"Worker for {url} encountered rate limiting - not saving partial data")
-            
-            # Increase the global delay to slow down all workers
-            backoff_delay = increase_rate_limit_delay()
-            
-            # Do NOT mark this URL as processed yet, so we can retry it later
-            # This allows the URL to be retried when rate limiting subsides
+        # Check if we got valid data or if it was an error
+        if data and data.get("_error"):
+            print(f"Worker for {url} encountered an error - not saving partial data")
+            # Do NOT mark this URL as processed, so we can retry it later
             return None
         
         # Save the data (use thread lock to avoid race conditions)
@@ -1238,12 +1446,6 @@ def scrape_profile_worker(url, use_visible_browser=False):
     except Exception as e:
         print(f"Worker error scraping profile {url}: {e}")
         return None
-    finally:
-        # Clean up driver
-        try:
-            driver.quit()
-        except:
-            pass  # Ignore errors during cleanup
 
 def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0, max_workers=4, use_visible_browser=False):
     """Scrape profiles from a file of URLs using hyper-optimized parallel processing."""
@@ -1431,8 +1633,10 @@ def print_usage():
     print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
     print("  --workers=N        Number of parallel workers (default: 16, set to 1 for serial processing)")
     print("  --batch-size=N     Number of profiles to process in each batch (default: 200)")
-    print("  --visible          Use fully visible browser (may steal focus)")
-    print("  --invisible        Use invisible browser (default, prevents focus stealing)")
+    print("  --bright-data      Use Bright Data Web Unlocker API (default, best for avoiding rate limits)")
+    print("  --no-bright-data   Don't use Bright Data Web Unlocker API (use Selenium instead)")
+    print("  --visible          Use fully visible browser (only applies when not using Bright Data)")
+    print("  --invisible        Use invisible browser (only applies when not using Bright Data)")
     print("  --reset            Reset progress and start fresh (clears profile_data.csv and scraped_urls.txt)")
     print("  --help             Show this help message")
 
@@ -1470,6 +1674,7 @@ def main():
     fully_visible = False  # Default to not fully visible
     workers = 16           # Extreme parallelization: 16 workers by default
     batch_size = 200       # Increased batch size for efficiency
+    use_web_unlocker = True  # Use Bright Data Web Unlocker API by default
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
@@ -1493,6 +1698,12 @@ def main():
             except ValueError:
                 print(f"Invalid start index: {arg}. Using default (0).")
                 start_index = 0
+        elif arg == "--web-unlocker" or arg == "--bright-data":
+            use_web_unlocker = True
+            print("Using Bright Data Web Unlocker API to bypass rate limits and CAPTCHAs")
+        elif arg == "--no-web-unlocker" or arg == "--no-bright-data":
+            use_web_unlocker = False
+            print("NOT using Bright Data Web Unlocker API (will use Selenium instead)")
         elif arg == "--fully-visible":
             fully_visible = True
             prevent_focus = False
@@ -1525,74 +1736,177 @@ def main():
                 print(f"Invalid batch size: {arg}. Using default (100).")
                 batch_size = 100
     
-    # Override initialize_driver to support visible/invisible mode toggle
-    from profile_finder import initialize_driver as original_init_driver
-    
-    # Create a simplified initializer that respects the visibility flag
-    def initialize_driver(headless=False, prevent_focus=True):
-        """Initialize Chrome driver with visibility based on prevent_focus setting"""
+    # Check if we should use Bright Data Web Unlocker API
+    if use_web_unlocker:
+        print("\n🌐 Using Bright Data Web Unlocker API for scraping")
+        print("This will help bypass CAPTCHAs and rate limits automatically")
         
-        # Install chromedriver using autoinstaller
-        chromedriver_path = chromedriver_autoinstaller.install()
-        print(f"Using chromedriver from: {chromedriver_path}")
-        
-        # Set up Chrome options
-        options = Options()
-        
-        # Apply visibility settings based on --visible flag
-        if not prevent_focus:
-            # VISIBLE MODE - NO HEADLESS OPTIONS AT ALL
-            print("\n🖥️ Creating VISIBLE browser - window will appear on screen\n")
-            # Only basic window settings
-            options.add_argument("--start-maximized")
-        else:
-            # Invisible mode with headless=new (better rendering)
-            print("Creating invisible headless browser (use --visible to make browser visible)")
-            options.add_argument("--headless=new")  # Most reliable headless mode
-            options.add_argument("--disable-gpu")
-            options.add_argument("--window-size=1920,1080")
-            # Additional settings for better performance in headless mode
-            options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
-            options.add_argument("--no-sandbox")  # Bypass OS security model for headless
-            options.add_argument("--disable-extensions")  # Disable extensions for better performance
-        
-        # Common options for all modes
-        options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        
-        # Create driver with explicit service
-        try:
-            driver = webdriver.Chrome(service=Service(chromedriver_path), options=options)
-            if not prevent_focus:
-                print("✓ VISIBLE Chrome browser created successfully")
-            return driver
-        except Exception as e:
-            print(f"Error creating Chrome driver: {e}")
-            raise
-    
-    # Replace the function
-    globals()['initialize_driver'] = initialize_driver
-    
-    # Run the scraper
-    if url:
-        print(f"Scraping single profile: {url}")
-        scrape_single_profile(url, use_visible_browser=(not prevent_focus))
-    else:
-        print(f"Scraping profiles from file: {url_file}")
-        print(f"Starting from index: {start_index}")
-        print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
-        print(f"Using batch size of {batch_size}")
-        print(f"Browser mode: {'VISIBLE (showing browser window)' if not prevent_focus else 'INVISIBLE (headless)'}")
-        
-        # Update scrape_from_url_file to accept batch_size and pass visibility setting
-        # Using a wrapper function to maintain backward compatibility
-        def scrape_with_batch_size(url_file, limit, start_index, workers):
-            # Modify the batch_size in the function and pass visibility
-            global batch_size
-            use_visible_mode = not prevent_focus
-            scrape_from_url_file(url_file, limit, start_index, workers, use_visible_browser=use_visible_mode)
+        # Run the scraper with Web Unlocker API
+        if url:
+            print(f"Scraping single profile using Web Unlocker API: {url}")
             
-        scrape_with_batch_size(url_file, limit, start_index, workers)
+            # Initialize CSV
+            initialize_csv()
+            
+            # Scrape the profile
+            try:
+                data = scrape_profile_with_bright_data(url)
+                if not data.get("_error"):
+                    save_to_csv(data)
+                    save_scraped_url(url)
+                    print(f"Successfully scraped profile: {url}")
+                else:
+                    print(f"Error scraping profile: {data.get('_error')}")
+            except Exception as e:
+                print(f"Error during scraping: {e}")
+        else:
+            print(f"Scraping profiles from file using Web Unlocker API: {url_file}")
+            print(f"Starting from index: {start_index}")
+            print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
+            print(f"Using batch size of {batch_size}")
+            
+            # When using Web Unlocker, we can use more workers since we're not using
+            # local browser resources and CPU/memory will not be a bottleneck
+            if workers < 10:
+                workers = 10
+                print(f"Increasing workers to {workers} for Web Unlocker mode (more efficient)")
+                
+            # Web Unlocker version needs no browser initialization
+            scrape_from_url_file(url_file, limit, start_index, workers)
+            
+    else:
+        # Using traditional Selenium approach
+        print("\n🖥️ Using traditional Selenium-based scraping (no Web Unlocker)")
+        
+        # Override initialize_driver to support visible/invisible mode toggle
+        from profile_finder import initialize_driver as original_init_driver
+        
+        # Create a standard Selenium driver initializer
+        def initialize_driver(headless=False, prevent_focus=True):
+            """Initialize Chrome driver with visibility based on prevent_focus setting"""
+            
+            # Install chromedriver using autoinstaller
+            chromedriver_path = chromedriver_autoinstaller.install()
+            print(f"Using chromedriver from: {chromedriver_path}")
+            
+            # Set up Chrome options
+            options = Options()
+            
+            # Apply visibility settings based on --visible flag
+            if not prevent_focus:
+                # VISIBLE MODE - NO HEADLESS OPTIONS AT ALL
+                print("\n🖥️ Creating VISIBLE browser - window will appear on screen\n")
+                # Only basic window settings
+                options.add_argument("--start-maximized")
+            else:
+                # Invisible mode with headless=new (better rendering)
+                print("Creating invisible headless browser (use --visible to make browser visible)")
+                options.add_argument("--headless=new")  # Most reliable headless mode
+                options.add_argument("--disable-gpu")
+                options.add_argument("--window-size=1920,1080")
+                # Additional settings for better performance in headless mode
+                options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
+                options.add_argument("--no-sandbox")  # Bypass OS security model for headless
+                options.add_argument("--disable-extensions")  # Disable extensions for better performance
+            
+            # Common options for all modes
+            options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            
+            # Create driver with explicit service
+            try:
+                driver = webdriver.Chrome(service=Service(chromedriver_path), options=options)
+                if not prevent_focus:
+                    print("✓ VISIBLE Chrome browser created successfully")
+                return driver
+            except Exception as e:
+                print(f"Error creating Chrome driver: {e}")
+                raise
+        
+        # Replace the function
+        globals()['initialize_driver'] = initialize_driver
+        
+        # Define a wrapper for scrape_from_url_file that uses the traditional approach
+        def scrape_with_selenium(url_file, limit, start_index, workers):
+            # Modify the scrape_profile_worker function to use the traditional scrape_profile
+            global scrape_profile_worker
+            
+            # Save the original function
+            original_scrape_profile_worker = scrape_profile_worker
+            
+            # Replace with a version that uses the traditional scrape_profile
+            def selenium_scrape_profile_worker(url, use_visible_browser=False):
+                """Worker function for parallel processing to scrape a single profile."""
+                # Create a new driver instance for this thread
+                driver = initialize_driver(headless=False, prevent_focus=(not use_visible_browser))
+                
+                try:
+                    # Check if already scraped
+                    scraped_urls = load_scraped_urls()
+                    if url in scraped_urls:
+                        print(f"Profile {url} has already been scraped. Skipping.")
+                        driver.quit()
+                        return None
+                    
+                    # Apply performance optimizations to driver
+                    optimize_driver_settings(driver)
+                    
+                    # Use the adaptive delay system based on global rate limiting state
+                    worker_delay = get_adaptive_delay()
+                    print(f"Worker using adaptive delay of {worker_delay:.2f}s before starting...")
+                    time.sleep(worker_delay)
+                    
+                    # Scrape the profile
+                    data = scrape_profile(driver, url)
+                    
+                    # Check if we got valid data or if it was a rate-limited error
+                    if data and data.get("_error") and "HTTP ERROR 440" in data.get("_error"):
+                        print(f"Worker for {url} encountered rate limiting - not saving partial data")
+                        
+                        # Increase the global delay to slow down all workers
+                        backoff_delay = increase_rate_limit_delay()
+                        
+                        # Do NOT mark this URL as processed yet, so we can retry it later
+                        return None
+                    
+                    # Save the data
+                    with csv_lock:
+                        save_to_csv(data)
+                        save_scraped_url(url)
+                    
+                    return data
+                except Exception as e:
+                    print(f"Worker error scraping profile {url}: {e}")
+                    return None
+                finally:
+                    # Clean up driver
+                    try:
+                        driver.quit()
+                    except:
+                        pass  # Ignore errors during cleanup
+            
+            # Swap in our Selenium worker
+            scrape_profile_worker = selenium_scrape_profile_worker
+            
+            # Call the scraper
+            scrape_from_url_file(url_file, limit, start_index, workers, use_visible_browser=(not prevent_focus))
+            
+            # Restore the original function
+            scrape_profile_worker = original_scrape_profile_worker
+        
+        # Run the scraper with Selenium
+        if url:
+            print(f"Scraping single profile with Selenium: {url}")
+            scrape_single_profile(url, use_visible_browser=(not prevent_focus))
+        else:
+            print(f"Scraping profiles from file with Selenium: {url_file}")
+            print(f"Starting from index: {start_index}")
+            print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
+            print(f"Using batch size of {batch_size}")
+            print(f"Browser mode: {'VISIBLE (showing browser window)' if not prevent_focus else 'INVISIBLE (headless)'}")
+            
+            # Run the scraper with the Selenium approach
+            scrape_with_selenium(url_file, limit, start_index, workers)
 
 if __name__ == "__main__":
     main()
