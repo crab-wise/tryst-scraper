@@ -26,9 +26,11 @@ ENV/
 # Data files
 *.csv
 scraped_urls.txt
-profile_urls.txt
+# Including profile_urls.txt for the repository
+# profile_urls.txt
 current_page.txt
 scraping_status.txt
+scraping_progress.txt
 
 # Screenshots
 *.png

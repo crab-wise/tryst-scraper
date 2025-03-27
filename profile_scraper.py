@@ -169,7 +169,7 @@ def scrape_single_profile(url):
     finally:
         driver.quit()
 
-def scrape_from_url_file(url_file="profile_urls.txt", limit=None):
+def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0):
     """Scrape profiles from a file of URLs."""
     # Check if file exists
     if not os.path.exists(url_file):
@@ -184,9 +184,12 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None):
     remaining_urls = [url for url in urls if url not in scraped_urls]
     
     if limit and limit > 0:
-        remaining_urls = remaining_urls[:limit]
+        remaining_urls = remaining_urls[start_index:start_index+limit]
+    else:
+        remaining_urls = remaining_urls[start_index:]
     
     print(f"Found {len(remaining_urls)} profiles to scrape out of {len(urls)} total.")
+    print(f"Starting from index {start_index}")
     
     if not remaining_urls:
         print("No new profiles to scrape.")
@@ -196,9 +199,31 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None):
     driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
     initialize_csv()
     
+    # Create a file to track progress
+    with open("scraping_progress.txt", "w") as f:
+        f.write(f"Starting from index: {start_index}\n")
+        f.write(f"Total profiles to scrape: {len(remaining_urls)}\n")
+        f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    
     try:
         for i, url in enumerate(remaining_urls):
-            print(f"Scraping profile {i+1}/{len(remaining_urls)}: {url}")
+            # Current real index (including the start_index offset)
+            current_index = start_index + i
+            
+            # Update progress file
+            with open("scraping_progress.txt", "w") as f:
+                f.write(f"Current index: {current_index}\n")
+                f.write(f"Profiles scraped: {i}/{len(remaining_urls)}\n")
+                f.write(f"Last URL: {url}\n")
+                f.write(f"Last update: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Completion: {i/len(remaining_urls)*100:.2f}%\n")
+            
+            print(f"\n{'='*50}")
+            print(f"SCRAPING PROFILE {i+1}/{len(remaining_urls)}")
+            print(f"OVERALL PROGRESS: {i/len(remaining_urls)*100:.2f}%")
+            print(f"INDEX: {current_index}")
+            print(f"URL: {url}")
+            print(f"{'='*50}\n")
             
             try:
                 # Scrape the profile
@@ -219,7 +244,16 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None):
     
     except Exception as e:
         print(f"Error during batch scraping: {e}")
+        print(f"Last successful index: {start_index + i - 1}")
+        print(f"To resume, use: python profile_scraper.py --start-index={start_index + i}")
     finally:
+        # Save final progress
+        with open("scraping_progress.txt", "a") as f:
+            f.write(f"Completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if 'i' in locals():
+                f.write(f"Last successful index: {start_index + i}\n")
+                f.write(f"To resume, use: python profile_scraper.py --start-index={start_index + i + 1}\n")
+        
         driver.quit()
 
 def print_usage():
@@ -227,11 +261,12 @@ def print_usage():
     print("Usage:")
     print(f"  {sys.argv[0]} [OPTIONS]")
     print("Options:")
-    print("  --url=URL       Scrape a single profile URL")
-    print("  --file=FILE     Scrape profiles from a file (default: profile_urls.txt)")
-    print("  --limit=N       Limit the number of profiles to scrape")
-    print("  --visible       Use fully visible browser (may steal focus)")
-    print("  --help          Show this help message")
+    print("  --url=URL          Scrape a single profile URL")
+    print("  --file=FILE        Scrape profiles from a file (default: profile_urls.txt)")
+    print("  --limit=N          Limit the number of profiles to scrape")
+    print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
+    print("  --visible          Use fully visible browser (may steal focus)")
+    print("  --help             Show this help message")
 
 def main():
     """Parse command line arguments and run the scraper."""
@@ -243,6 +278,7 @@ def main():
     url = None
     url_file = "profile_urls.txt"
     limit = None
+    start_index = 0
     prevent_focus = True
     
     # Parse command line arguments
@@ -258,6 +294,15 @@ def main():
                 print(f"Invalid limit: {arg}")
                 print_usage()
                 return
+        elif arg.startswith("--start-index="):
+            try:
+                start_index = int(arg.split("=", 1)[1])
+                if start_index < 0:
+                    print("Start index must be at least 0. Setting to 0.")
+                    start_index = 0
+            except ValueError:
+                print(f"Invalid start index: {arg}. Using default (0).")
+                start_index = 0
         elif arg == "--visible":
             prevent_focus = False
             print("Using fully visible browser mode (may steal focus)")
@@ -278,7 +323,8 @@ def main():
         scrape_single_profile(url)
     else:
         print(f"Scraping profiles from file: {url_file}")
-        scrape_from_url_file(url_file, limit)
+        print(f"Starting from index: {start_index}")
+        scrape_from_url_file(url_file, limit, start_index)
 
 if __name__ == "__main__":
     main()
