@@ -42,12 +42,34 @@ def scrape_profile(driver, url):
     """Scrape a profile, revealing all hidden information and collecting all contact details."""
     import time as timing_module  # For performance measurement
     
-    print(f"Scraping {url}...")
+    print(f"\n{'='*80}")
+    print(f"📄 Scraping profile: {url}")
+    print(f"{'='*80}")
+    
     start_time = timing_module.time()
     
-    # Load the page
+    # Load the page with retry mechanism
     page_load_start = timing_module.time()
-    driver.get(url)
+    max_page_load_attempts = 3
+    page_loaded = False
+    
+    for attempt in range(max_page_load_attempts):
+        try:
+            print(f"Loading page (attempt {attempt+1}/{max_page_load_attempts})...")
+            driver.get(url)
+            page_loaded = True
+            break
+        except Exception as e:
+            print(f"Error loading page on attempt {attempt+1}: {e}")
+            if attempt < max_page_load_attempts - 1:
+                print("Retrying in 3 seconds...")
+                time.sleep(3)
+            else:
+                print("Max load attempts reached, continuing anyway")
+                
+    if not page_loaded:
+        print("⚠️ Warning: Page may not have loaded properly")
+        
     page_load_time = timing_module.time() - page_load_start
     print(f"⏱️ Page load time: {page_load_time:.2f} seconds")
     
@@ -1305,7 +1327,7 @@ def main():
     url_file = "profile_urls.txt"
     limit = None
     start_index = 0
-    prevent_focus = True   # Default to invisible mode
+    prevent_focus = True   # Default to invisible mode (--visible flag can override)
     fully_visible = False  # Default to not fully visible
     workers = 16           # Extreme parallelization: 16 workers by default
     batch_size = 200       # Increased batch size for efficiency
@@ -1386,10 +1408,14 @@ def main():
             options.add_argument("--start-maximized")
         else:
             # Invisible mode with headless=new (better rendering)
-            print("Creating invisible headless browser")
-            options.add_argument("--headless=new")
+            print("Creating invisible headless browser (use --visible to make browser visible)")
+            options.add_argument("--headless=new")  # Most reliable headless mode
             options.add_argument("--disable-gpu")
             options.add_argument("--window-size=1920,1080")
+            # Additional settings for better performance in headless mode
+            options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
+            options.add_argument("--no-sandbox")  # Bypass OS security model for headless
+            options.add_argument("--disable-extensions")  # Disable extensions for better performance
         
         # Common options for all modes
         options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -1417,6 +1443,7 @@ def main():
         print(f"Starting from index: {start_index}")
         print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
         print(f"Using batch size of {batch_size}")
+        print(f"Browser mode: {'VISIBLE (showing browser window)' if not prevent_focus else 'INVISIBLE (headless)'}")
         
         # Update scrape_from_url_file to accept batch_size and pass visibility setting
         # Using a wrapper function to maintain backward compatibility
