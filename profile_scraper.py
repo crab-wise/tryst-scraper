@@ -48,6 +48,11 @@ def scrape_profile(driver, url):
     
     start_time = timing_module.time()
     
+    # Add minimal delay before loading to reduce rate limiting
+    pre_load_delay = random.uniform(1.0, 2.5)  # Minimal random delay between 1-2.5 seconds
+    print(f"Adding pre-load delay of {pre_load_delay:.2f} seconds to avoid rate limiting...")
+    time.sleep(pre_load_delay)
+    
     # Load the page with retry mechanism
     page_load_start = timing_module.time()
     max_page_load_attempts = 3
@@ -58,7 +63,20 @@ def scrape_profile(driver, url):
             print(f"Loading page (attempt {attempt+1}/{max_page_load_attempts})...")
             driver.get(url)
             page_loaded = True
+            
+            # Quick check for rate limiting error
+            if "This page isn't working" in driver.page_source and "HTTP ERROR 440" in driver.page_source:
+                print(f"⚠️ Rate limiting detected (HTTP ERROR 440) on attempt {attempt+1}")
+                if attempt < max_page_load_attempts - 1:
+                    # Add slightly longer delay before retry
+                    retry_delay = random.uniform(3.0, 5.0)
+                    print(f"Waiting {retry_delay:.2f} seconds before retry...")
+                    time.sleep(retry_delay)
+                    continue  # Try again with next attempt
+            
+            # If we got here, we either have a good page or a different error
             break
+            
         except Exception as e:
             print(f"Error loading page on attempt {attempt+1}: {e}")
             if attempt < max_page_load_attempts - 1:
@@ -110,6 +128,13 @@ def scrape_profile(driver, url):
     
     # Take a screenshot to help with debugging
     driver.save_screenshot(f"page_{url.split('/')[-1]}.png")
+    
+    # Check for HTTP 440 error - common rate limiting response
+    if "This page isn't working" in driver.page_source and "HTTP ERROR 440" in driver.page_source:
+        print("⚠️ HTTP ERROR 440 detected - likely rate limited")
+        data["name"] = None  # Prevent "This page isn't working" from being saved as the name
+        data["_error"] = "HTTP ERROR 440 - Rate limited"
+        return data  # Return early with error data
     
     # First check if we're NOT on a CAPTCHA page
     if "You're Almost There" in driver.page_source or "security check" in driver.page_source.lower():
@@ -948,6 +973,16 @@ def scrape_profile(driver, url):
                 # Skip special keys that start with _
                 if js_field.startswith("_"):
                     continue
+                
+                # Skip error messages that might be captured as values
+                if isinstance(value, str) and (
+                    "An error occurred" in value or 
+                    "Please try again" in value or
+                    "This page isn't working" in value or
+                    value.strip() == "Error"
+                ):
+                    print(f"⚠️ Skipping error message in {js_field}: '{value}'")
+                    continue
                     
                 for key, data_field in field_mapping.items():
                     if key in js_field:
@@ -1009,6 +1044,22 @@ def initialize_csv(filename="profile_data.csv"):
 
 def save_to_csv(data, filename="profile_data.csv"):
     """Append profile data to the CSV."""
+    # Skip saving if we have an error flag
+    if data.get("_error"):
+        print(f"Not saving profile with error: {data.get('_error')}")
+        return
+        
+    # Filter out common error messages from any field
+    for key in data:
+        if isinstance(data[key], str) and (
+            "This page isn't working" in data[key] or
+            "An error occurred" in data[key] or
+            "Please try again" in data[key] or
+            "Error" == data[key].strip()
+        ):
+            print(f"Clearing error message from {key} field: '{data[key]}'")
+            data[key] = None
+    
     with open(filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -1117,8 +1168,21 @@ def scrape_profile_worker(url, use_visible_browser=False):
         # Apply performance optimizations to driver
         optimize_driver_settings(driver)
         
+        # Add a small per-worker random delay to help avoid rate limiting
+        worker_delay = random.uniform(0.5, 2.0)
+        print(f"Worker adding delay of {worker_delay:.2f}s before starting...")
+        time.sleep(worker_delay)
+        
         # Scrape the profile
         data = scrape_profile(driver, url)
+        
+        # Check if we got valid data or if it was a rate-limited error
+        if data and data.get("_error") and "HTTP ERROR 440" in data.get("_error"):
+            print(f"Worker for {url} encountered rate limiting - not saving partial data")
+            # Still marking URL as processed to avoid retrying immediately
+            with csv_lock:
+                save_scraped_url(url)
+            return None
         
         # Save the data (use thread lock to avoid race conditions)
         with csv_lock:
