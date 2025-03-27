@@ -34,7 +34,7 @@ from profile_finder import (
 )
 
 def scrape_profile(driver, url):
-    """Scrape a profile, revealing hidden email and collecting data."""
+    """Scrape a profile, revealing all hidden information and collecting all contact details."""
     print(f"Scraping {url}...")
     driver.get(url)
     
@@ -42,7 +42,23 @@ def scrape_profile(driver, url):
     handle_age_verification(driver)
     handle_captcha(driver)
     
-    data = {"url": url, "email": None, "website": None, "onlyfans": None}
+    # Initialize data dictionary with all possible contact fields
+    data = {
+        "url": url,
+        "name": None,
+        "email": None,
+        "phone": None,
+        "mobile": None,
+        "whatsapp": None,
+        "linktree": None,
+        "website": None,
+        "onlyfans": None,
+        "fansly": None,
+        "twitter": None,
+        "instagram": None,
+        "snapchat": None,
+        "telegram": None
+    }
     
     try:
         # Extract profile name
@@ -50,61 +66,188 @@ def scrape_profile(driver, url):
             profile_name = driver.find_element(By.CSS_SELECTOR, "h1.profile-header__name").text.strip()
             data["name"] = profile_name
             print(f"Profile name: {profile_name}")
-        except:
-            print("Could not extract profile name")
+        except Exception as e:
+            print(f"Could not extract profile name: {e}")
         
-        # Reveal and extract email
+        # Click all "Show" buttons to reveal hidden information
         try:
-            show_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, '//a[@title="Show Email"]'))
-            )
-            show_button.click()
+            # First look for all "Show Email", "Show Mobile", "Show WhatsApp" links
+            # This more specific selector targets exactly the show links in the contact details
+            show_buttons = driver.find_elements(By.CSS_SELECTOR, "a[data-action*='unobfuscate-details#revealUnobfuscatedContent']")
+            print(f"Found {len(show_buttons)} contact 'Show' buttons using specific CSS selector")
             
-            email_span = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'span[data-unobfuscate-details-target="output"]'))
-            )
+            if not show_buttons:
+                # Try a second approach with class selectors
+                show_buttons = driver.find_elements(By.CSS_SELECTOR, "a.text-secondary.fw-bold.text-decoration-none")
+                print(f"Found {len(show_buttons)} 'Show' buttons using class selector")
+                
+                if not show_buttons:
+                    # Fall back to the XPATH as a last resort
+                    show_buttons = driver.find_elements(By.XPATH, '//a[contains(@title, "Show") or contains(text(), "Show")]')
+                    print(f"Found {len(show_buttons)} 'Show' buttons using XPATH")
             
-            # Wait for the email to fully unobfuscate (dots ● should disappear)
-            WebDriverWait(driver, 10).until(lambda d: "●" not in email_span.text)
-            data["email"] = email_span.text.strip()
-            print(f"Email: {data['email']}")
-        except (TimeoutException, NoSuchElementException) as e:
-            print(f"No email found or failed to unobfuscate: {e}")
-
-        # Extract website links
-        try:
-            website_links = driver.find_elements(By.XPATH, '//a[contains(text(), "Website") or contains(@href, "http") and not(contains(@href, "tryst.link"))]')
-            if website_links:
-                data["website"] = website_links[0].get_attribute("href")
-                print(f"Website: {data['website']}")
+            # Take a screenshot for debugging
+            driver.save_screenshot("before_clicking_show_buttons.png")
+            print(f"Saved screenshot before clicking buttons")
+            
+            # Click each Show button
+            for button in show_buttons:
+                try:
+                    button_text = button.text.strip()
+                    button_title = button.get_attribute("title") or button_text
+                    button_html = button.get_attribute("outerHTML")
+                    print(f"Found button: {button_title}")
+                    print(f"Button HTML: {button_html}")
+                    
+                    # Make sure button is in view
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+                    time.sleep(0.5)
+                    
+                    # Try JavaScript click for more reliable interaction
+                    driver.execute_script("arguments[0].click();", button)
+                    print(f"Successfully clicked {button_title}")
+                    
+                    # Small delay to let unobfuscation happen
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"Error clicking button {button_title}: {e}")
+                    try:
+                        # Fall back to regular click if JS click fails
+                        button.click()
+                        print(f"Successfully clicked {button_title} with regular click")
+                        time.sleep(1)
+                    except Exception as e2:
+                        print(f"Both click methods failed: {e2}")
+            
+            # Take another screenshot after clicking
+            driver.save_screenshot("after_clicking_show_buttons.png")
+            print(f"Saved screenshot after clicking buttons")
+            
+            # Wait for all hidden content to become visible
+            time.sleep(2)
         except Exception as e:
-            print(f"Error extracting website: {e}")
-
-        # Extract OnlyFans link
-        try:
-            onlyfans_links = driver.find_elements(By.XPATH, '//a[contains(text(), "OnlyFans") or contains(@href, "onlyfans.com")]')
-            if onlyfans_links:
-                data["onlyfans"] = onlyfans_links[0].get_attribute("href")
-                print(f"OnlyFans: {data['onlyfans']}")
-        except Exception as e:
-            print(f"Error extracting OnlyFans: {e}")
+            print(f"Error revealing hidden information: {e}")
+        
+        # Now extract all contact details after buttons have been clicked
+        # Take a full page screenshot for debugging
+        screenshot_path = f"profile_{url.split('/')[-1]}.png"
+        driver.save_screenshot(screenshot_path)
+        print(f"Saved screenshot to {screenshot_path}")
+        
+        # Find all contact sections
+        contact_sections = driver.find_elements(By.CSS_SELECTOR, "ul.list-style-none.bg-light.p-3.rounded")
+        print(f"Found {len(contact_sections)} contact sections")
+        
+        # Process all contact rows
+        for section in contact_sections:
+            try:
+                contact_rows = section.find_elements(By.CSS_SELECTOR, "div.row.justify-content-between")
+                print(f"Found {len(contact_rows)} contact rows in section")
+                
+                for row in contact_rows:
+                    try:
+                        # Get the label/type of contact from the first column
+                        label_el = row.find_element(By.CSS_SELECTOR, "div.col-auto.fw-bold")
+                        label = label_el.text.strip().lower()
+                        print(f"Processing contact type: {label}")
+                        
+                        # Get the value from the second column
+                        value_el = row.find_element(By.CSS_SELECTOR, "div.col-auto.text-end")
+                        
+                        # First check for revealed (unobfuscated) information
+                        unobfuscated_spans = value_el.find_elements(By.CSS_SELECTOR, "span[data-unobfuscate-details-target='output']")
+                        if unobfuscated_spans and not "●" in unobfuscated_spans[0].text:
+                            # This is an unobfuscated value (after clicking Show)
+                            value = unobfuscated_spans[0].text.strip()
+                            print(f"Found unobfuscated value: {value}")
+                        else:
+                            # Check for regular links
+                            links = value_el.find_elements(By.CSS_SELECTOR, "a")
+                            if links:
+                                # For regular links like Twitter, Instagram, etc.
+                                value = links[0].get_attribute("href")
+                                print(f"Found link value: {value}")
+                            else:
+                                # Any other text
+                                value = value_el.text.strip()
+                                print(f"Found text value: {value}")
+                                
+                                # Skip if value contains obfuscated characters
+                                if "●" in value:
+                                    print(f"Skipping obfuscated value: {value}")
+                                    continue
+                        
+                        # Store the value in the appropriate field
+                        if "email" in label:
+                            data["email"] = value
+                            print(f"Saved email: {value}")
+                        elif "mobile" in label:
+                            data["mobile"] = value
+                            print(f"Saved mobile: {value}")
+                        elif "phone" in label:
+                            data["phone"] = value
+                            print(f"Saved phone: {value}")
+                        elif "whatsapp" in label:
+                            data["whatsapp"] = value
+                            print(f"Saved whatsapp: {value}")
+                        elif "twitter" in label or "x " in label:
+                            data["twitter"] = value
+                            print(f"Saved twitter: {value}")
+                        elif "instagram" in label:
+                            data["instagram"] = value
+                            print(f"Saved instagram: {value}")
+                        elif "linktree" in label:
+                            data["linktree"] = value
+                            print(f"Saved linktree: {value}")
+                        elif "onlyfans" in label:
+                            data["onlyfans"] = value
+                            print(f"Saved onlyfans: {value}")
+                        elif "fansly" in label:
+                            data["fansly"] = value
+                            print(f"Saved fansly: {value}")
+                        elif "snapchat" in label:
+                            data["snapchat"] = value
+                            print(f"Saved snapchat: {value}")
+                        elif "telegram" in label:
+                            data["telegram"] = value
+                            print(f"Saved telegram: {value}")
+                        elif "website" in label:
+                            data["website"] = value
+                            print(f"Saved website: {value}")
+                    except Exception as e:
+                        print(f"Error processing contact row: {e}")
+                        continue
+            except Exception as e:
+                print(f"Error processing contact section: {e}")
+                continue
             
-        # Extract other social media
-        try:
-            twitter_links = driver.find_elements(By.XPATH, '//a[contains(text(), "Twitter") or contains(@href, "twitter.com") or contains(@href, "x.com")]')
-            if twitter_links:
-                data["twitter"] = twitter_links[0].get_attribute("href")
-                print(f"Twitter: {data['twitter']}")
-        except:
-            print("No Twitter link found")
-            
-        try:
-            instagram_links = driver.find_elements(By.XPATH, '//a[contains(text(), "Instagram") or contains(@href, "instagram.com")]')
-            if instagram_links:
-                data["instagram"] = instagram_links[0].get_attribute("href")
-                print(f"Instagram: {data['instagram']}")
-        except:
-            print("No Instagram link found")
+        # As a backup, also try to find contact links using XPath for anything we missed
+        if not data["onlyfans"]:
+            try:
+                onlyfans_links = driver.find_elements(By.XPATH, '//a[contains(@href, "onlyfans.com")]')
+                if onlyfans_links:
+                    data["onlyfans"] = onlyfans_links[0].get_attribute("href")
+                    print(f"Found OnlyFans (XPath method): {data['onlyfans']}")
+            except:
+                pass
+                
+        if not data["twitter"]:
+            try:
+                twitter_links = driver.find_elements(By.XPATH, '//a[contains(@href, "twitter.com") or contains(@href, "x.com")]')
+                if twitter_links:
+                    data["twitter"] = twitter_links[0].get_attribute("href")
+                    print(f"Found Twitter (XPath method): {data['twitter']}")
+            except:
+                pass
+                
+        if not data["instagram"]:
+            try:
+                instagram_links = driver.find_elements(By.XPATH, '//a[contains(@href, "instagram.com")]')
+                if instagram_links:
+                    data["instagram"] = instagram_links[0].get_attribute("href")
+                    print(f"Found Instagram (XPath method): {data['instagram']}")
+            except:
+                pass
 
     except Exception as e:
         print(f"Error scraping profile {url}: {e}")
@@ -116,7 +259,11 @@ def initialize_csv(filename="profile_data.csv"):
     if not os.path.exists(filename):
         with open(filename, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["Profile URL", "Name", "Email", "Website", "OnlyFans", "Twitter", "Instagram"])
+            writer.writerow([
+                "Profile URL", "Name", "Email", "Phone", "Mobile", "WhatsApp", 
+                "Linktree", "Website", "OnlyFans", "Fansly", "Twitter", "Instagram",
+                "Snapchat", "Telegram"
+            ])
 
 def save_to_csv(data, filename="profile_data.csv"):
     """Append profile data to the CSV."""
@@ -126,10 +273,17 @@ def save_to_csv(data, filename="profile_data.csv"):
             data.get("url", ""),
             data.get("name", ""),
             data.get("email", ""),
+            data.get("phone", ""),
+            data.get("mobile", ""),
+            data.get("whatsapp", ""),
+            data.get("linktree", ""),
             data.get("website", ""),
             data.get("onlyfans", ""),
+            data.get("fansly", ""),
             data.get("twitter", ""),
-            data.get("instagram", "")
+            data.get("instagram", ""),
+            data.get("snapchat", ""),
+            data.get("telegram", "")
         ])
     print(f"Saved data to {filename}")
 
@@ -151,7 +305,7 @@ def scrape_single_profile(url):
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
+    driver = initialize_driver(headless=False, prevent_focus=False)  # Fully visible browser with no focus prevention
     initialize_csv()
     
     try:
@@ -196,7 +350,7 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0)
         return
     
     # Initialize driver and CSV
-    driver = initialize_driver(headless=False, prevent_focus=True)  # Visible browser but prevent focus stealing
+    driver = initialize_driver(headless=False, prevent_focus=False)  # Fully visible browser with no focus prevention
     initialize_csv()
     
     # Create a file to track progress
@@ -266,13 +420,33 @@ def print_usage():
     print("  --limit=N          Limit the number of profiles to scrape")
     print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
     print("  --visible          Use fully visible browser (may steal focus)")
+    print("  --reset            Reset progress and start fresh (clears profile_data.csv and scraped_urls.txt)")
     print("  --help             Show this help message")
+
+def reset_progress():
+    """Reset progress by removing CSV and scraped URLs files."""
+    csv_file = "profile_data.csv"
+    scraped_urls_file = "scraped_urls.txt"
+    
+    if os.path.exists(csv_file):
+        os.remove(csv_file)
+        print(f"Removed {csv_file}")
+    
+    if os.path.exists(scraped_urls_file):
+        os.remove(scraped_urls_file)
+        print(f"Removed {scraped_urls_file}")
+    
+    print("Progress has been reset. Starting fresh.")
 
 def main():
     """Parse command line arguments and run the scraper."""
     if "--help" in sys.argv or "-h" in sys.argv:
         print_usage()
         return
+    
+    # Check for reset flag first
+    if "--reset" in sys.argv:
+        reset_progress()
     
     # Default options
     url = None
@@ -312,6 +486,9 @@ def main():
     
     # Create a custom initializer that uses our prevent_focus setting
     def custom_init_driver(headless=False, prevent_focus=prevent_focus):
+        # When --visible flag is used, force prevent_focus to False
+        if not prevent_focus:
+            print("Running in FULLY VISIBLE MODE - browser will be completely visible")
         return original_init_driver(headless=headless, prevent_focus=prevent_focus)
     
     # Replace the imported function with our custom one
