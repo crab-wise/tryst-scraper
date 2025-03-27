@@ -24,6 +24,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 # Import CAPTCHA solving functions from profile_finder
 from profile_finder import (
@@ -35,12 +37,23 @@ from profile_finder import (
 
 def scrape_profile(driver, url):
     """Scrape a profile, revealing all hidden information and collecting all contact details."""
+    import time as timing_module  # For performance measurement
+    
     print(f"Scraping {url}...")
+    start_time = timing_module.time()
+    
+    # Load the page
+    page_load_start = timing_module.time()
     driver.get(url)
+    page_load_time = timing_module.time() - page_load_start
+    print(f"⏱️ Page load time: {page_load_time:.2f} seconds")
     
     # Handle age verification and CAPTCHA if needed
+    verification_start = timing_module.time()
     handle_age_verification(driver)
     handle_captcha(driver)
+    verification_time = timing_module.time() - verification_start
+    print(f"⏱️ Age verification and CAPTCHA handling: {verification_time:.2f} seconds")
     
     # Initialize data dictionary with all possible contact fields
     data = {
@@ -71,10 +84,16 @@ def scrape_profile(driver, url):
         
         # Click all "Show" buttons to reveal hidden information
         try:
+            # Time the button finding and clicking process
+            button_find_start = timing_module.time()
+            
             # First look for all "Show Email", "Show Mobile", "Show WhatsApp" links
             # This more specific selector targets exactly the show links in the contact details
             show_buttons = driver.find_elements(By.CSS_SELECTOR, "a[data-action*='unobfuscate-details#revealUnobfuscatedContent']")
             print(f"Found {len(show_buttons)} contact 'Show' buttons using specific CSS selector")
+            
+            button_find_time = timing_module.time() - button_find_start
+            print(f"⏱️ Button finding time: {button_find_time:.2f} seconds")
             
             if not show_buttons:
                 # Try a second approach with class selectors
@@ -90,6 +109,9 @@ def scrape_profile(driver, url):
             driver.save_screenshot("before_clicking_show_buttons.png")
             print(f"Saved screenshot before clicking buttons")
             
+            # Time the button clicking process
+            button_click_start = timing_module.time()
+            
             # Click each Show button
             for button in show_buttons:
                 try:
@@ -101,21 +123,22 @@ def scrape_profile(driver, url):
                     
                     # Make sure button is in view
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
-                    time.sleep(0.5)
+                    # Reduce wait time after scrolling
+                    time.sleep(0.2)
                     
                     # Try JavaScript click for more reliable interaction
                     driver.execute_script("arguments[0].click();", button)
                     print(f"Successfully clicked {button_title}")
                     
-                    # Small delay to let unobfuscation happen
-                    time.sleep(1)
+                    # Reduce unobfuscation delay 
+                    time.sleep(0.5)
                 except Exception as e:
                     print(f"Error clicking button {button_title}: {e}")
                     try:
                         # Fall back to regular click if JS click fails
                         button.click()
                         print(f"Successfully clicked {button_title} with regular click")
-                        time.sleep(1)
+                        time.sleep(0.3)  # Reduced delay
                     except Exception as e2:
                         print(f"Both click methods failed: {e2}")
             
@@ -123,12 +146,19 @@ def scrape_profile(driver, url):
             driver.save_screenshot("after_clicking_show_buttons.png")
             print(f"Saved screenshot after clicking buttons")
             
-            # Wait for all hidden content to become visible
-            time.sleep(2)
+            # Calculate total button clicking time
+            button_click_time = timing_module.time() - button_click_start
+            print(f"⏱️ Button clicking time: {button_click_time:.2f} seconds")
+            
+            # Wait for all hidden content to become visible (reduced time)
+            time.sleep(0.5)
         except Exception as e:
             print(f"Error revealing hidden information: {e}")
         
         # Now extract all contact details after buttons have been clicked
+        # Start timing data extraction
+        extraction_start = timing_module.time()
+        
         # Take a full page screenshot for debugging
         screenshot_path = f"profile_{url.split('/')[-1]}.png"
         driver.save_screenshot(screenshot_path)
@@ -248,6 +278,14 @@ def scrape_profile(driver, url):
                     print(f"Found Instagram (XPath method): {data['instagram']}")
             except:
                 pass
+                
+        # Calculate data extraction time
+        extraction_time = timing_module.time() - extraction_start
+        print(f"⏱️ Data extraction time: {extraction_time:.2f} seconds")
+        
+        # Calculate total profile scraping time
+        total_time = timing_module.time() - start_time
+        print(f"⏱️ TOTAL SCRAPING TIME: {total_time:.2f} seconds")
 
     except Exception as e:
         print(f"Error scraping profile {url}: {e}")
@@ -323,8 +361,39 @@ def scrape_single_profile(url):
     finally:
         driver.quit()
 
-def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0):
-    """Scrape profiles from a file of URLs."""
+def scrape_profile_worker(url):
+    """Worker function for parallel processing to scrape a single profile."""
+    # Create a new driver instance for this thread
+    driver = initialize_driver(headless=False, prevent_focus=True)  # Invisible mode that prevents focus stealing
+    
+    try:
+        # Check if already scraped
+        scraped_urls = load_scraped_urls()
+        if url in scraped_urls:
+            print(f"Profile {url} has already been scraped. Skipping.")
+            driver.quit()
+            return None
+        
+        # Scrape the profile
+        data = scrape_profile(driver, url)
+        
+        # Save the data (use thread lock to avoid race conditions)
+        with csv_lock:
+            save_to_csv(data)
+            save_scraped_url(url)
+        
+        return data
+    except Exception as e:
+        print(f"Worker error scraping profile {url}: {e}")
+        return None
+    finally:
+        driver.quit()
+
+def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0, max_workers=4):
+    """Scrape profiles from a file of URLs using parallel processing."""
+    global csv_lock  # To prevent race conditions when writing to CSV file
+    csv_lock = threading.Lock()
+    
     # Check if file exists
     if not os.path.exists(url_file):
         print(f"URL file {url_file} not found. Please run profile_finder.py first.")
@@ -344,13 +413,13 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0)
     
     print(f"Found {len(remaining_urls)} profiles to scrape out of {len(urls)} total.")
     print(f"Starting from index {start_index}")
+    print(f"Using parallel processing with {max_workers} workers")
     
     if not remaining_urls:
         print("No new profiles to scrape.")
         return
     
-    # Initialize driver and CSV
-    driver = initialize_driver(headless=False, prevent_focus=True)  # Invisible mode that prevents focus stealing
+    # Initialize CSV file
     initialize_csv()
     
     # Create a file to track progress
@@ -358,57 +427,74 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0)
         f.write(f"Starting from index: {start_index}\n")
         f.write(f"Total profiles to scrape: {len(remaining_urls)}\n")
         f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Using {max_workers} parallel workers\n")
+    
+    # Use ThreadPoolExecutor for parallel processing
+    total_start_time = time.time()
+    completed = 0
     
     try:
-        for i, url in enumerate(remaining_urls):
-            # Current real index (including the start_index offset)
-            current_index = start_index + i
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks and keep track of futures
+            futures = {executor.submit(scrape_profile_worker, url): (i, url) for i, url in enumerate(remaining_urls)}
             
-            # Update progress file
-            with open("scraping_progress.txt", "w") as f:
-                f.write(f"Current index: {current_index}\n")
-                f.write(f"Profiles scraped: {i}/{len(remaining_urls)}\n")
-                f.write(f"Last URL: {url}\n")
-                f.write(f"Last update: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Completion: {i/len(remaining_urls)*100:.2f}%\n")
-            
-            print(f"\n{'='*50}")
-            print(f"SCRAPING PROFILE {i+1}/{len(remaining_urls)}")
-            print(f"OVERALL PROGRESS: {i/len(remaining_urls)*100:.2f}%")
-            print(f"INDEX: {current_index}")
-            print(f"URL: {url}")
-            print(f"{'='*50}\n")
-            
-            try:
-                # Scrape the profile
-                data = scrape_profile(driver, url)
+            # Process futures as they complete
+            for future in futures:
+                i, url = futures[future]
+                current_index = start_index + i
                 
-                # Save the data
-                save_to_csv(data)
-                save_scraped_url(url)
+                # Update progress before processing each profile
+                with open("scraping_progress.txt", "w") as f:
+                    f.write(f"Current index: {current_index}\n")
+                    f.write(f"Profiles scraped: {completed}/{len(remaining_urls)}\n")
+                    f.write(f"Processing URL: {url}\n")
+                    f.write(f"Last update: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Completion: {completed/len(remaining_urls)*100:.2f}%\n")
                 
-                # Add random delay to avoid detection
-                delay = random.uniform(2, 5)
-                print(f"Waiting {delay:.2f} seconds before next profile...")
-                time.sleep(delay)
+                print(f"\n{'='*50}")
+                print(f"PROCESSING PROFILE {i+1}/{len(remaining_urls)}")
+                print(f"OVERALL PROGRESS: {completed/len(remaining_urls)*100:.2f}%")
+                print(f"INDEX: {current_index}")
+                print(f"URL: {url}")
+                print(f"{'='*50}\n")
                 
-            except Exception as e:
-                print(f"Error scraping profile {url}: {e}")
-                continue
+                try:
+                    # Wait for this future to complete
+                    result = future.result()
+                    completed += 1
+                    
+                    # Update progress after processing
+                    with open("scraping_progress.txt", "w") as f:
+                        f.write(f"Current index: {current_index}\n")
+                        f.write(f"Profiles scraped: {completed}/{len(remaining_urls)}\n")
+                        f.write(f"Last completed URL: {url}\n")
+                        f.write(f"Last update: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write(f"Completion: {completed/len(remaining_urls)*100:.2f}%\n")
+                    
+                except Exception as e:
+                    print(f"Error processing future for {url}: {e}")
     
     except Exception as e:
-        print(f"Error during batch scraping: {e}")
-        print(f"Last successful index: {start_index + i - 1}")
-        print(f"To resume, use: python profile_scraper.py --start-index={start_index + i}")
+        print(f"Error during parallel batch scraping: {e}")
     finally:
+        # Calculate total time
+        total_time = time.time() - total_start_time
+        profiles_per_second = completed / total_time if total_time > 0 else 0
+        
         # Save final progress
         with open("scraping_progress.txt", "a") as f:
             f.write(f"Completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            if 'i' in locals():
-                f.write(f"Last successful index: {start_index + i}\n")
-                f.write(f"To resume, use: python profile_scraper.py --start-index={start_index + i + 1}\n")
+            f.write(f"Total profiles processed: {completed}/{len(remaining_urls)}\n")
+            f.write(f"Total time: {total_time:.2f} seconds\n")
+            f.write(f"Speed: {profiles_per_second:.2f} profiles/second\n")
+            f.write(f"To resume, use: python profile_scraper.py --start-index={start_index + completed}\n")
         
-        driver.quit()
+        print(f"\n{'='*50}")
+        print(f"SCRAPING COMPLETED")
+        print(f"Total profiles processed: {completed}/{len(remaining_urls)}")
+        print(f"Total time: {total_time:.2f} seconds")
+        print(f"Speed: {profiles_per_second:.2f} profiles/second")
+        print(f"{'='*50}\n")
 
 def print_usage():
     """Print usage instructions."""
@@ -419,6 +505,7 @@ def print_usage():
     print("  --file=FILE        Scrape profiles from a file (default: profile_urls.txt)")
     print("  --limit=N          Limit the number of profiles to scrape")
     print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
+    print("  --workers=N        Number of parallel workers (default: 4, set to 1 for serial processing)")
     print("  --visible          Use fully visible browser (may steal focus)")
     print("  --invisible        Use invisible browser (default, prevents focus stealing)")
     print("  --reset            Reset progress and start fresh (clears profile_data.csv and scraped_urls.txt)")
@@ -455,6 +542,7 @@ def main():
     limit = None
     start_index = 0
     prevent_focus = True  # Default to invisible mode
+    workers = 4           # Default to 4 parallel workers
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
@@ -484,6 +572,16 @@ def main():
         elif arg == "--invisible":
             prevent_focus = True
             print("Using invisible browser mode (prevents focus stealing)")
+        elif arg.startswith("--workers="):
+            try:
+                workers = int(arg.split("=", 1)[1])
+                if workers < 1:
+                    print("Workers must be at least 1. Setting to 1.")
+                    workers = 1
+                print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
+            except ValueError:
+                print(f"Invalid workers: {arg}. Using default (4).")
+                workers = 4
     
     # Override the initialize_driver function to use our focus prevention setting
     from profile_finder import initialize_driver as original_init_driver
@@ -505,7 +603,8 @@ def main():
     else:
         print(f"Scraping profiles from file: {url_file}")
         print(f"Starting from index: {start_index}")
-        scrape_from_url_file(url_file, limit, start_index)
+        print(f"Using {workers} parallel worker{'s' if workers > 1 else ''}")
+        scrape_from_url_file(url_file, limit, start_index, workers)
 
 if __name__ == "__main__":
     main()
