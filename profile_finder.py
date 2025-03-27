@@ -29,9 +29,16 @@ def initialize_driver(headless=False, prevent_focus=True):
     """Set up Chrome WebDriver with anti-detection options."""
     options = Options()
     
+    # Check if we should use visible mode
+    if not prevent_focus:
+        # Fully visible mode
+        print("Using FULLY VISIBLE browser mode - window will be visible")
+        # Set window size for better visibility
+        options.add_argument("--window-size=1600,1200")
+        options.add_argument("--start-maximized")
     # For macOS, the most effective way to prevent focus stealing is to use a special
     # variant of headless mode that still renders pages but doesn't have a window
-    if prevent_focus:
+    elif prevent_focus:
         # This is a headless mode that renders properly but doesn't steal focus
         options.add_argument("--headless=new")
         # These ensure proper rendering in headless mode
@@ -387,7 +394,8 @@ def handle_captcha(driver):
     # Check if we're on the security check page - this is highest priority
     if "You're Almost There" in driver.page_source or "security check" in driver.page_source.lower():
         print("Security check (CAPTCHA) page detected.")
-        result = handle_captcha(driver)
+        # Fixed: Call solve_image_text_captcha instead of recursive handle_captcha call
+        result = solve_image_text_captcha(driver)
         if not result:
             print("Automated CAPTCHA solving failed.")
             return False
