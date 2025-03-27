@@ -85,76 +85,8 @@ def scrape_profile(driver, url):
         except Exception as e:
             print(f"Could not extract profile name: {e}")
         
-        # Click all "Show" buttons to reveal hidden information
-        try:
-            # Time the button finding and clicking process
-            button_find_start = timing_module.time()
-            
-            # First look for all "Show Email", "Show Mobile", "Show WhatsApp" links
-            # This more specific selector targets exactly the show links in the contact details
-            show_buttons = driver.find_elements(By.CSS_SELECTOR, "a[data-action*='unobfuscate-details#revealUnobfuscatedContent']")
-            print(f"Found {len(show_buttons)} contact 'Show' buttons using specific CSS selector")
-            
-            button_find_time = timing_module.time() - button_find_start
-            print(f"⏱️ Button finding time: {button_find_time:.2f} seconds")
-            
-            if not show_buttons:
-                # Try a second approach with class selectors
-                show_buttons = driver.find_elements(By.CSS_SELECTOR, "a.text-secondary.fw-bold.text-decoration-none")
-                print(f"Found {len(show_buttons)} 'Show' buttons using class selector")
-                
-                if not show_buttons:
-                    # Fall back to the XPATH as a last resort
-                    show_buttons = driver.find_elements(By.XPATH, '//a[contains(@title, "Show") or contains(text(), "Show")]')
-                    print(f"Found {len(show_buttons)} 'Show' buttons using XPATH")
-            
-            # Take a screenshot for debugging
-            driver.save_screenshot("before_clicking_show_buttons.png")
-            print(f"Saved screenshot before clicking buttons")
-            
-            # Time the button clicking process
-            button_click_start = timing_module.time()
-            
-            # Click each Show button
-            for button in show_buttons:
-                try:
-                    button_text = button.text.strip()
-                    button_title = button.get_attribute("title") or button_text
-                    button_html = button.get_attribute("outerHTML")
-                    print(f"Found button: {button_title}")
-                    print(f"Button HTML: {button_html}")
-                    
-                    # Execute a faster version of scrolling and clicking in one JS call
-                    driver.execute_script("""
-                        arguments[0].scrollIntoView({block: 'center'});
-                        arguments[0].click();
-                    """, button)
-                    print(f"Successfully clicked {button_title}")
-                    
-                    # Minimum delay (just enough for the DOM to update)
-                    time.sleep(0.1)
-                except Exception as e:
-                    print(f"Error clicking button {button_title}: {e}")
-                    try:
-                        # Fall back to regular click if JS click fails
-                        button.click()
-                        print(f"Successfully clicked {button_title} with regular click")
-                        time.sleep(0.1)  # Minimal delay
-                    except Exception as e2:
-                        print(f"Both click methods failed: {e2}")
-            
-            # Take another screenshot after clicking
-            driver.save_screenshot("after_clicking_show_buttons.png")
-            print(f"Saved screenshot after clicking buttons")
-            
-            # Calculate total button clicking time
-            button_click_time = timing_module.time() - button_click_start
-            print(f"⏱️ Button clicking time: {button_click_time:.2f} seconds")
-            
-            # Wait for all hidden content to become visible (reduced time)
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error revealing hidden information: {e}")
+        # EXTREME OPTIMIZATION: Skip separate button clicking step
+        # JavaScript data extraction now handles button clicking in one step
         
         # Now extract all contact details after buttons have been clicked - optimized version
         # Start timing data extraction
@@ -166,65 +98,90 @@ def scrape_profile(driver, url):
         # print(f"Saved screenshot to {screenshot_path}")
         
         # OPTIMIZED: Extract contact details using a direct JavaScript approach
-        # This collects all contact information at once using JavaScript to avoid Selenium overhead
+        # This collects all contact information at once using optimized JavaScript
         contact_data = driver.execute_script("""
+            // EXTREME OPTIMIZATION: Single pass information extraction
+            // Extract all contact data in one fast operation
+            
             const result = {};
             
-            // Process contact sections
-            const contactSections = document.querySelectorAll("ul.list-style-none.bg-light.p-3.rounded");
-            
-            for (const section of contactSections) {
-                const rows = section.querySelectorAll("div.row.justify-content-between");
-                
-                for (const row of rows) {
+            // Function to extract all contact data in one pass
+            function extractAllContactData() {
+                // Click all show buttons and extract in one step
+                document.querySelectorAll('a[data-action*="unobfuscate-details#revealUnobfuscatedContent"]').forEach(btn => {
                     try {
-                        // Get label
+                        // Force click without animations
+                        btn.click();
+                    } catch(e) {}
+                });
+                
+                // Wait a minimal time for reveals to happen (50ms)
+                setTimeout(() => {}, 50);
+                
+                // Extract all data
+                const data = {};
+                
+                // Helper to extract all visible contacts
+                document.querySelectorAll("ul.list-style-none.bg-light.p-3.rounded div.row.justify-content-between").forEach(row => {
+                    try {
                         const labelEl = row.querySelector("div.col-auto.fw-bold");
-                        if (!labelEl) continue;
-                        
-                        // Extract label text and clean it
-                        let label = labelEl.textContent.trim().toLowerCase();
-                        // Handle "X (formerly Twitter)" case
-                        if (label.includes("(formerly twitter)")) {
-                            label = "twitter";
-                        }
-                        
-                        // Get value element
                         const valueEl = row.querySelector("div.col-auto.text-end");
-                        if (!valueEl) continue;
                         
+                        if (!labelEl || !valueEl) return;
+                        
+                        // Get label
+                        let label = labelEl.textContent.trim().toLowerCase();
+                        if (label.includes("(formerly twitter)")) label = "twitter";
+                        
+                        // Get value
                         let value = null;
                         
-                        // Check for unobfuscated info
-                        const unobfuscatedSpan = valueEl.querySelector("span[data-unobfuscate-details-target='output']");
-                        if (unobfuscatedSpan && !unobfuscatedSpan.textContent.includes('●')) {
-                            value = unobfuscatedSpan.textContent.trim();
+                        // Try span first (for revealed info)
+                        const span = valueEl.querySelector("span[data-unobfuscate-details-target='output']");
+                        if (span && !span.textContent.includes('●')) {
+                            value = span.textContent.trim();
                         } else {
-                            // Check for links
+                            // Try links
                             const link = valueEl.querySelector("a");
                             if (link) {
                                 value = link.href;
                             } else {
-                                // Any other text
+                                // Plain text
                                 const text = valueEl.textContent.trim();
-                                if (!text.includes('●')) {
+                                if (!text.includes('●') && text.length > 2) {
                                     value = text;
                                 }
                             }
                         }
                         
-                        // Store if we found a value
-                        if (value) {
-                            result[label] = value;
+                        if (value) data[label] = value;
+                    } catch(e) {}
+                });
+                
+                // Also extract direct social links
+                const socialPlatforms = ['onlyfans.com', 'instagram.com', 'twitter.com', 'x.com', 'fansly.com'];
+                document.querySelectorAll('a[href]').forEach(link => {
+                    try {
+                        const href = link.href;
+                        for (const platform of socialPlatforms) {
+                            if (href.includes(platform)) {
+                                // Determine platform type
+                                let type = platform.split('.')[0];
+                                if (platform === 'x.com') type = 'twitter';
+                                
+                                // Add to data
+                                if (!data[type]) data[type] = href;
+                                break;
+                            }
                         }
-                    } catch(e) {
-                        // Skip errors
-                        continue;
-                    }
-                }
+                    } catch(e) {}
+                });
+                
+                return data;
             }
             
-            return result;
+            // Run the extraction
+            return extractAllContactData();
         """)
         
         # For debugging
@@ -367,35 +324,37 @@ def scrape_single_profile(url):
         driver.quit()
 
 def optimize_driver_settings(driver):
-    """Apply additional optimizations to the driver for faster performance."""
-    # Adjust timeouts for faster responses
-    driver.set_page_load_timeout(30)  # Set a reasonable timeout
-    driver.set_script_timeout(10)     # Faster script execution timeout
+    """Apply extreme optimizations to the driver for maximum performance."""
+    # Set aggressive timeouts for faster responses
+    driver.set_page_load_timeout(15)   # Reduced timeout for faster operation
+    driver.set_script_timeout(5)       # Faster script execution timeout
     
-    # Disable unnecessary features via JavaScript
+    # Disable unnecessary features via JavaScript for extreme speed
     driver.execute_script("""
-        // Disable animations for better performance
+        // Disable animations completely
         const style = document.createElement('style');
         style.innerHTML = `
             * {
-                animation-duration: 0.001s !important;
-                transition-duration: 0.001s !important;
+                animation: none !important;
+                transition: none !important;
+                animation-duration: 0s !important;
+                transition-duration: 0s !important;
             }
         `;
         document.head.appendChild(style);
         
-        // Disable image loading for speed (uncomment if needed)
-        // document.querySelectorAll('img').forEach(img => {
-        //    img.style.display = 'none';
-        // });
-        
-        // Disable CSS transitions
-        document.querySelectorAll('*').forEach(el => {
-            if (el.style) {
-                el.style.transition = 'none';
-                el.style.animation = 'none';
-            }
+        // Disable image loading for speed
+        document.querySelectorAll('img').forEach(img => {
+           img.style.display = 'none';
+           img.setAttribute('loading', 'lazy');
         });
+        
+        // Disable all event listeners that might cause delays
+        document.addEventListener = function() {};
+        window.addEventListener = function() {};
+        
+        // Prevent expensive reflows
+        document.body.style.contain = 'strict';
     """)
     
     return driver
@@ -589,8 +548,8 @@ def print_usage():
     print("  --file=FILE        Scrape profiles from a file (default: profile_urls.txt)")
     print("  --limit=N          Limit the number of profiles to scrape")
     print("  --start-index=N    Start scraping from index N in the URL list (default: 0)")
-    print("  --workers=N        Number of parallel workers (default: 8, set to 1 for serial processing)")
-    print("  --batch-size=N     Number of profiles to process in each batch (default: 100)")
+    print("  --workers=N        Number of parallel workers (default: 16, set to 1 for serial processing)")
+    print("  --batch-size=N     Number of profiles to process in each batch (default: 200)")
     print("  --visible          Use fully visible browser (may steal focus)")
     print("  --invisible        Use invisible browser (default, prevents focus stealing)")
     print("  --reset            Reset progress and start fresh (clears profile_data.csv and scraped_urls.txt)")
@@ -626,9 +585,9 @@ def main():
     url_file = "profile_urls.txt"
     limit = None
     start_index = 0
-    prevent_focus = True  # Default to invisible mode
-    workers = 8           # Default to 8 parallel workers
-    batch_size = 100      # Default batch size
+    prevent_focus = True   # Default to invisible mode
+    workers = 16           # Extreme parallelization: 16 workers by default
+    batch_size = 200       # Increased batch size for efficiency
     
     # Parse command line arguments
     for arg in sys.argv[1:]:
