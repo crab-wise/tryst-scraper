@@ -30,6 +30,41 @@ import multiprocessing
 from queue import Queue, Empty
 from functools import partial
 
+# Global rate limiting tracking variables
+RATE_LIMIT_COUNTER = 0
+RATE_LIMIT_LOCK = threading.Lock()
+BASE_DELAY = 2.0  # Starting delay in seconds
+MAX_DELAY = 60.0  # Maximum delay in seconds
+CURRENT_DELAY = BASE_DELAY  # Current delay, will adjust based on rate limiting
+
+def get_adaptive_delay():
+    """Get the current delay value, with small randomization"""
+    global CURRENT_DELAY
+    with RATE_LIMIT_LOCK:
+        # Add random variation of ±20%
+        jitter = CURRENT_DELAY * random.uniform(-0.2, 0.2)
+        return max(BASE_DELAY, min(MAX_DELAY, CURRENT_DELAY + jitter))
+
+def increase_rate_limit_delay():
+    """Increase the delay after encountering rate limiting"""
+    global RATE_LIMIT_COUNTER, CURRENT_DELAY
+    with RATE_LIMIT_LOCK:
+        RATE_LIMIT_COUNTER += 1
+        # Exponential backoff: double the delay for each error, up to MAX_DELAY
+        CURRENT_DELAY = min(MAX_DELAY, CURRENT_DELAY * 1.5)
+        print(f"⚠️ Rate limiting detected {RATE_LIMIT_COUNTER} times. Increasing delay to {CURRENT_DELAY:.2f}s")
+        return CURRENT_DELAY
+
+def reset_rate_limit_delay():
+    """Reset delay after several successful requests"""
+    global RATE_LIMIT_COUNTER, CURRENT_DELAY
+    with RATE_LIMIT_LOCK:
+        if CURRENT_DELAY > BASE_DELAY:
+            # Gradually decrease delay
+            CURRENT_DELAY = max(BASE_DELAY, CURRENT_DELAY * 0.9)
+            print(f"✓ Successful request. Decreasing delay to {CURRENT_DELAY:.2f}s")
+        return CURRENT_DELAY
+
 # Import CAPTCHA solving functions from profile_finder
 from profile_finder import (
     initialize_driver,
@@ -48,10 +83,10 @@ def scrape_profile(driver, url):
     
     start_time = timing_module.time()
     
-    # Add minimal delay before loading to reduce rate limiting
-    pre_load_delay = random.uniform(1.0, 2.5)  # Minimal random delay between 1-2.5 seconds
-    print(f"Adding pre-load delay of {pre_load_delay:.2f} seconds to avoid rate limiting...")
-    time.sleep(pre_load_delay)
+    # Use adaptive delay based on rate limiting history
+    adaptive_delay = get_adaptive_delay()
+    print(f"Adding adaptive delay of {adaptive_delay:.2f} seconds to avoid rate limiting...")
+    time.sleep(adaptive_delay)
     
     # Load the page with retry mechanism
     page_load_start = timing_module.time()
@@ -64,15 +99,22 @@ def scrape_profile(driver, url):
             driver.get(url)
             page_loaded = True
             
-            # Quick check for rate limiting error
+            # Check for rate limiting error
             if "This page isn't working" in driver.page_source and "HTTP ERROR 440" in driver.page_source:
                 print(f"⚠️ Rate limiting detected (HTTP ERROR 440) on attempt {attempt+1}")
+                
+                # Increase global delay to slow down all workers
+                backoff_delay = increase_rate_limit_delay()
+                
                 if attempt < max_page_load_attempts - 1:
-                    # Add slightly longer delay before retry
-                    retry_delay = random.uniform(3.0, 5.0)
-                    print(f"Waiting {retry_delay:.2f} seconds before retry...")
+                    # Wait using the new increased delay with some randomization
+                    retry_delay = backoff_delay * random.uniform(1.0, 1.2)  # Add some jitter
+                    print(f"Backing off for {retry_delay:.2f} seconds before retry...")
                     time.sleep(retry_delay)
                     continue  # Try again with next attempt
+            else:
+                # Successful load, gradually decrease delay if it was increased
+                reset_rate_limit_delay()
             
             # If we got here, we either have a good page or a different error
             break
@@ -1168,9 +1210,9 @@ def scrape_profile_worker(url, use_visible_browser=False):
         # Apply performance optimizations to driver
         optimize_driver_settings(driver)
         
-        # Add a small per-worker random delay to help avoid rate limiting
-        worker_delay = random.uniform(0.5, 2.0)
-        print(f"Worker adding delay of {worker_delay:.2f}s before starting...")
+        # Use the adaptive delay system based on global rate limiting state
+        worker_delay = get_adaptive_delay()
+        print(f"Worker using adaptive delay of {worker_delay:.2f}s before starting...")
         time.sleep(worker_delay)
         
         # Scrape the profile
@@ -1179,9 +1221,12 @@ def scrape_profile_worker(url, use_visible_browser=False):
         # Check if we got valid data or if it was a rate-limited error
         if data and data.get("_error") and "HTTP ERROR 440" in data.get("_error"):
             print(f"Worker for {url} encountered rate limiting - not saving partial data")
-            # Still marking URL as processed to avoid retrying immediately
-            with csv_lock:
-                save_scraped_url(url)
+            
+            # Increase the global delay to slow down all workers
+            backoff_delay = increase_rate_limit_delay()
+            
+            # Do NOT mark this URL as processed yet, so we can retry it later
+            # This allows the URL to be retried when rate limiting subsides
             return None
         
         # Save the data (use thread lock to avoid race conditions)
@@ -1314,12 +1359,42 @@ def scrape_from_url_file(url_file="profile_urls.txt", limit=None, start_index=0,
                         print(f"Error processing future for {url}: {e}")
                         errors += 1
             
+            # Check rate limiting status to determine next actions
+            global RATE_LIMIT_COUNTER, CURRENT_DELAY
+            
+            # If we've hit rate limits multiple times, reduce workers and batch size
+            if RATE_LIMIT_COUNTER > 5:
+                adjusted_workers = max(2, max_workers // 2)  # Cut workers in half but keep at least 2
+                if adjusted_workers < max_workers:
+                    print(f"⚠️ Too many rate limits ({RATE_LIMIT_COUNTER}). Reducing workers from {max_workers} to {adjusted_workers}")
+                    max_workers = adjusted_workers
+                
+                # Also reduce batch size
+                adjusted_batch = max(10, batch_size // 2)  # Cut batch size in half but keep at least 10
+                if adjusted_batch < batch_size:
+                    print(f"⚠️ Reducing batch size from {batch_size} to {adjusted_batch}")
+                    batch_size = adjusted_batch
+                    
+                # Wait longer between batches
+                between_batch_delay = CURRENT_DELAY * 2
+                print(f"⏰ Adding extended delay of {between_batch_delay:.2f}s between batches")
+                time.sleep(between_batch_delay)
+                
+                # Reset counter after adjustments made
+                with RATE_LIMIT_LOCK:
+                    RATE_LIMIT_COUNTER = 0
+            
             # Update for next batch
             current_batch_start += current_batch_size
             remaining_to_process -= current_batch_size
             
             # Update scraped_urls with newly completed URLs to avoid reprocessing
             scraped_urls = load_scraped_urls()
+            
+            # Small delay between batches to avoid rate limiting
+            batch_pause = get_adaptive_delay() / 2  # Half the normal delay
+            print(f"Pausing {batch_pause:.2f}s between batches...")
+            time.sleep(batch_pause)
     
     except Exception as e:
         print(f"Error during batch processing: {e}")
