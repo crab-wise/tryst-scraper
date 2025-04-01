@@ -11,34 +11,25 @@ build/
 # Virtual environments
 venv/
 env/
-ENV/
+.env
 
 # IDE files
 .idea/
 .vscode/
 *.swp
-*.swo
 
-# Local development
-.env
-.local
+# Node.js
+node_modules/
+package-lock.json
+package.json
 
-# Data files
-*.csv
-scraped_urls.txt
-# Including profile_urls.txt for the repository
-# profile_urls.txt
-current_page.txt
-scraping_status.txt
-scraping_progress.txt
+# Mac OS
+.DS_Store
 
-# Screenshots
-*.png
-*.jpg
-*.jpeg
-
-# Logs
+# Project specific
+scraper_stats.json
+final_stats.json
 *.log
-
-# Cache
-.cache/
+*.png
+test_results/
+captcha_*.png

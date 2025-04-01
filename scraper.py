@@ -18,6 +18,10 @@ import base64
 import random
 import logging
 import argparse
+import requests  # Added for 2captcha API
+
+# Add 2captcha API key for CAPTCHA solving
+TWOCAPTCHA_API_KEY = "47c255be6d47c6761bd1db4141b5c8a4"
 import asyncio
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
@@ -35,6 +39,112 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Functions for 2captcha CAPTCHA solving
+def solve_captcha_with_2captcha_imagetotext(image_path):
+    """Solve image-to-text CAPTCHA using 2Captcha service."""
+    logger.info("Attempting to solve image CAPTCHA with 2Captcha...")
+    
+    try:
+        # Read the image file as base64
+        with open(image_path, "rb") as image_file:
+            image_data = image_file.read()
+            base64_image = base64.b64encode(image_data).decode('utf-8')
+            
+            # Debug image size
+            image_size_kb = len(image_data) / 1024
+            logger.debug(f"Image size for 2Captcha: {image_size_kb:.2f} KB")
+        
+        # Create task with 2Captcha specific parameters
+        task_payload = {
+            "clientKey": TWOCAPTCHA_API_KEY,
+            "task": {
+                "type": "ImageToTextTask",
+                "body": base64_image,
+                "phrase": False,
+                "case": True,
+                "numeric": 0,
+                "math": False,
+                "minLength": 0,
+                "maxLength": 0
+            }
+        }
+        
+        # Create 2Captcha task
+        url = "https://api.2captcha.com/createTask"
+        logger.debug("Sending createTask request to 2Captcha...")
+        response = requests.post(url, json=task_payload)
+        
+        if response.status_code != 200:
+            error_msg = f"Error creating 2Captcha task: {response.status_code}"
+            logger.error(error_msg)
+            return None
+            
+        data = response.json()
+        if data.get("errorId") != 0:
+            error_msg = f"Error from 2Captcha API: {data.get('errorDescription', 'Unknown error')}"
+            logger.error(error_msg)
+            return None
+            
+        task_id = data.get("taskId")
+        if not task_id:
+            logger.error("No taskId returned from 2Captcha")
+            return None
+            
+        logger.debug(f"2Captcha task created with ID: {task_id}")
+        
+        # Get task result with retries
+        max_attempts = 20
+        attempts = 0
+        result_data = None
+        
+        while attempts < max_attempts:
+            attempts += 1
+            logger.debug(f"Checking task result, attempt {attempts}/{max_attempts}...")
+            
+            # Wait before checking result
+            time.sleep(3)  # 3 seconds between checks
+            
+            # Get task result
+            get_result_payload = {
+                "clientKey": TWOCAPTCHA_API_KEY,
+                "taskId": task_id
+            }
+            result_url = "https://api.2captcha.com/getTaskResult" 
+            result_response = requests.post(result_url, json=get_result_payload)
+            
+            if result_response.status_code != 200:
+                logger.error(f"Error getting task result: {result_response.status_code}")
+                continue
+                
+            result_data = result_response.json()
+            
+            # Check for error in response
+            if result_data.get("errorId") != 0:
+                error_msg = f"Error getting result: {result_data.get('errorDescription', 'Unknown error')}"
+                logger.error(error_msg)
+                return None
+                
+            # Check if task is ready
+            status = result_data.get("status")
+            if status == "ready":
+                solution = result_data.get("solution", {}).get("text")
+                if solution:
+                    logger.info(f"2Captcha solved the CAPTCHA: {solution}")
+                    return solution
+                else:
+                    logger.error("2Captcha returned empty solution")
+                    return None
+            
+            # If not ready, continue waiting
+            logger.debug(f"Task not ready yet, status: {status}")
+        
+        logger.error(f"Failed to get task result after {max_attempts} attempts")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error in 2Captcha solving process: {str(e)}")
+        return None
 
 # Bright Data Scraping Browser Configuration
 # Hardcoded credentials from the image
@@ -470,6 +580,387 @@ class TrystScraper:
                         # Wait a bit more to ensure page is fully loaded
                         await asyncio.sleep(2)
                         
+                        # First check if the page has the "You're almost there" text
+                        await ws.send_json({
+                            "id": 24,
+                            "method": "Runtime.evaluate",
+                            "params": {
+                                "expression": "document.documentElement.outerHTML",
+                                "returnByValue": True
+                            },
+                            "sessionId": session_id
+                        })
+                        
+                        # Get the HTML for analysis
+                        page_html = ""
+                        async for msg in ws:
+                            if msg.type == WSMsgType.TEXT:
+                                response = json.loads(msg.data)
+                                if "id" in response and response["id"] == 24:
+                                    if "result" in response and "result" in response["result"]:
+                                        page_html = response["result"]["result"].get("value", "")
+                                    break
+                        
+                        is_verification_page = "You're almost there" in page_html
+                        
+                        # Use the built-in CAPTCHA solver first
+                        logger.info("Attempting to solve any CAPTCHAs on the page with built-in solver...")
+                        await ws.send_json({
+                            "id": 25,
+                            "method": "Captcha.solve",
+                            "params": {
+                                "detectTimeout": 30000  # 30 seconds timeout
+                            },
+                            "sessionId": session_id
+                        })
+                        
+                        # Wait for CAPTCHA solve result
+                        captcha_status = None
+                        async for msg in ws:
+                            if msg.type == WSMsgType.TEXT:
+                                response = json.loads(msg.data)
+                                if "id" in response and response["id"] == 25:
+                                    if "result" in response and "status" in response["result"]:
+                                        captcha_status = response["result"]["status"]
+                                        logger.info(f"CAPTCHA solve status: {captcha_status}")
+                                    else:
+                                        error = response.get("error", {}).get("message", "Unknown error")
+                                        logger.error(f"Error solving CAPTCHA: {error}")
+                                    break
+                        
+                        # If we're on verification page but built-in solver didn't work, try 2captcha
+                        if is_verification_page and captcha_status != "solve_finished":
+                            logger.info("Verification page detected but built-in solver didn't work. Trying 2captcha...")
+                            
+                            # Take a screenshot of the page
+                            await ws.send_json({
+                                "id": 26,
+                                "method": "Page.captureScreenshot",
+                                "sessionId": session_id
+                            })
+                            
+                            # Get the screenshot data
+                            screenshot_data = None
+                            async for msg in ws:
+                                if msg.type == WSMsgType.TEXT:
+                                    response = json.loads(msg.data)
+                                    if "id" in response and response["id"] == 26:
+                                        if "result" in response and "data" in response["result"]:
+                                            screenshot_data = response["result"]["data"]
+                                        break
+                            
+                            if screenshot_data:
+                                # Save the screenshot
+                                captcha_image_path = f"captcha_{url.split('/')[-1]}.png"
+                                with open(captcha_image_path, "wb") as f:
+                                    f.write(base64.b64decode(screenshot_data))
+                                logger.info(f"Saved CAPTCHA screenshot to {captcha_image_path}")
+                                
+                                # Try to solve with 2captcha
+                                captcha_solution = solve_captcha_with_2captcha_imagetotext(captcha_image_path)
+                                
+                                if captcha_solution:
+                                    logger.info(f"2captcha provided solution: {captcha_solution}")
+                                    
+                                    # Find the input field and submit
+                                    await ws.send_json({
+                                        "id": 27,
+                                        "method": "Runtime.evaluate",
+                                        "params": {
+                                            "expression": f"""
+                                                (async function() {{
+                                                    // Find the input field
+                                                    let inputField = document.querySelector('input[name="response"]');
+                                                    if (!inputField) {{
+                                                        // Try more generic selectors
+                                                        inputField = document.querySelector('input[type="text"]');
+                                                    }}
+                                                    
+                                                    if (!inputField) {{
+                                                        // Try to find any input field
+                                                        const inputs = document.querySelectorAll('input');
+                                                        for (const inp of inputs) {{
+                                                            if (inp.type !== 'hidden' && inp.offsetParent !== null) {{
+                                                                inputField = inp;
+                                                                break;
+                                                            }}
+                                                        }}
+                                                    }}
+                                                    
+                                                    if (!inputField) {{
+                                                        return {{success: false, error: "Could not find input field"}};
+                                                    }}
+                                                    
+                                                    // Enter the CAPTCHA solution
+                                                    inputField.value = "{captcha_solution}";
+                                                    
+                                                    // Find the submit button
+                                                    let submitButton = document.querySelector('button[type="submit"]');
+                                                    if (!submitButton) {{
+                                                        // Try more generic approaches
+                                                        const buttons = document.querySelectorAll('button');
+                                                        for (const btn of buttons) {{
+                                                            const text = btn.textContent.toLowerCase();
+                                                            if (text.includes('unlock') || text.includes('submit') || 
+                                                                text.includes('verify') || btn.type === 'submit') {{
+                                                                submitButton = btn;
+                                                                break;
+                                                            }}
+                                                        }}
+                                                    }}
+                                                    
+                                                    if (submitButton) {{
+                                                        // Click the button
+                                                        submitButton.click();
+                                                        await new Promise(r => setTimeout(r, 1000));
+                                                        return {{success: true, method: "button"}};
+                                                    }} else {{
+                                                        // Try submitting the form
+                                                        const form = inputField.closest('form');
+                                                        if (form) {{
+                                                            form.submit();
+                                                            await new Promise(r => setTimeout(r, 1000));
+                                                            return {{success: true, method: "form"}};
+                                                        }} else {{
+                                                            // Last resort: try Enter key
+                                                            const event = new KeyboardEvent('keypress', {{
+                                                                key: 'Enter',
+                                                                code: 'Enter',
+                                                                keyCode: 13,
+                                                                which: 13,
+                                                                bubbles: true
+                                                            }});
+                                                            inputField.dispatchEvent(event);
+                                                            await new Promise(r => setTimeout(r, 1000));
+                                                            return {{success: true, method: "enter key"}};
+                                                        }}
+                                                    }}
+                                                }})();
+                                            """,
+                                            "returnByValue": True,
+                                            "awaitPromise": True
+                                        },
+                                        "sessionId": session_id
+                                    })
+                                    
+                                    # Get the result of the CAPTCHA submission
+                                    captcha_submit_result = None
+                                    async for msg in ws:
+                                        if msg.type == WSMsgType.TEXT:
+                                            response = json.loads(msg.data)
+                                            if "id" in response and response["id"] == 27:
+                                                if "result" in response and "result" in response["result"]:
+                                                    captcha_submit_result = response["result"]["result"].get("value", {})
+                                                break
+                                    
+                                    if captcha_submit_result:
+                                        logger.info(f"CAPTCHA submission result: {captcha_submit_result}")
+                                        
+                                        # Wait a bit for the page to load after CAPTCHA submission
+                                        await asyncio.sleep(3)
+                                        
+                                        # Now check if we're still on the verification page
+                                        await ws.send_json({
+                                            "id": 28,
+                                            "method": "Runtime.evaluate",
+                                            "params": {
+                                                "expression": "document.title",
+                                                "returnByValue": True
+                                            },
+                                            "sessionId": session_id
+                                        })
+                                        
+                                        # Get the page title
+                                        page_title = ""
+                                        async for msg in ws:
+                                            if msg.type == WSMsgType.TEXT:
+                                                response = json.loads(msg.data)
+                                                if "id" in response and response["id"] == 28:
+                                                    if "result" in response and "result" in response["result"]:
+                                                        page_title = response["result"]["result"].get("value", "")
+                                                    break
+                                        
+                                        if "You're almost there" not in page_title:
+                                            logger.info("CAPTCHA solved successfully! Verification page passed.")
+                                            captcha_status = "solve_finished"  # Mark as solved
+                                        else:
+                                            logger.warning("Still on verification page after 2captcha attempt")
+                                else:
+                                    logger.warning("2captcha failed to provide a solution")
+                            else:
+                                logger.warning("Failed to get screenshot for 2captcha")
+                        
+                        # If CAPTCHA wasn't detected or wasn't solved, continue anyway
+                        if captcha_status not in ["solve_finished", "not_detected"]:
+                            logger.warning(f"CAPTCHA not successfully solved. Status: {captcha_status}")
+                        
+                        # Wait a bit after CAPTCHA solving
+                        await asyncio.sleep(2)
+                        
+                        # Click all "Show" buttons to reveal contact info - improved version
+                        await ws.send_json({
+                            "id": 29,
+                            "method": "Runtime.evaluate",
+                            "params": {
+                                "expression": """
+                                    (async function() {
+                                        try {
+                                            // Track button count and success
+                                            let clickedCount = 0;
+                                            
+                                            // Multiple selectors for Show buttons
+                                            const selectors = [
+                                                'a[data-action*="unobfuscate-details#revealUnobfuscatedContent"]',
+                                                'a.text-secondary.fw-bold.text-decoration-none',
+                                                'a.fw-bold[href="javascript:void(0)"]'
+                                            ];
+                                            
+                                            // Function to find and click buttons
+                                            async function clickButtonsWithSelector(selector) {
+                                                try {
+                                                    const buttons = document.querySelectorAll(selector);
+                                                    
+                                                    console.log(`Found ${buttons.length} buttons with selector: ${selector}`);
+                                                    
+                                                    for (const btn of buttons) {
+                                                        try {
+                                                            // Check if this button is for showing hidden content
+                                                            const isShowBtn = btn.textContent.includes('Show') || 
+                                                                             btn.dataset.action?.includes('unobfuscate') ||
+                                                                             btn.className.includes('fw-bold');
+                                                            
+                                                            if (isShowBtn) {
+                                                                console.log(`Clicking button: ${btn.textContent}`);
+                                                                // Try direct click first
+                                                                btn.click();
+                                                                clickedCount++;
+                                                                
+                                                                // Check for CAPTCHA after each click
+                                                                if (document.title.includes("You're almost there") || 
+                                                                    document.querySelector('iframe[src*="captcha"]')) {
+                                                                    console.log("⚠️ CAPTCHA detected after button click");
+                                                                    return {clickedCount, captchaDetected: true};
+                                                                }
+                                                                
+                                                                // Wait for content to load
+                                                                await new Promise(r => setTimeout(r, 700));
+                                                            }
+                                                        } catch (btnError) {
+                                                            console.error(`Error clicking specific button: ${btnError}`);
+                                                            // Try with JavaScript as fallback
+                                                            try {
+                                                                console.log("Using JS click fallback");
+                                                                const clickEvent = document.createEvent('MouseEvents');
+                                                                clickEvent.initEvent('click', true, true);
+                                                                btn.dispatchEvent(clickEvent);
+                                                                clickedCount++;
+                                                                await new Promise(r => setTimeout(r, 700));
+                                                            } catch (jsClickError) {
+                                                                console.error(`JS click also failed: ${jsClickError}`);
+                                                            }
+                                                        }
+                                                    }
+                                                    return {clickedCount, captchaDetected: false};
+                                                } catch (selectorError) {
+                                                    console.error(`Error with selector ${selector}: ${selectorError}`);
+                                                    return {clickedCount: 0, captchaDetected: false};
+                                                }
+                                            }
+                                            
+                                            // Try each selector
+                                            for (const selector of selectors) {
+                                                const result = await clickButtonsWithSelector(selector);
+                                                clickedCount += result.clickedCount;
+                                                
+                                                // If CAPTCHA detected, stop and report
+                                                if (result.captchaDetected) {
+                                                    return {clickedCount, captchaDetected: true};
+                                                }
+                                            }
+                                            
+                                            // Second pass: Look for any remaining obfuscated content and try to find their buttons
+                                            const obfuscatedSpans = document.querySelectorAll('span.user-select-none.font-monospace');
+                                            console.log(`Found ${obfuscatedSpans.length} obfuscated spans that might need clicking`);
+                                            
+                                            if (obfuscatedSpans.length > 0) {
+                                                // Look for nearby show buttons
+                                                for (const span of obfuscatedSpans) {
+                                                    try {
+                                                        // Look for a nearby button
+                                                        const parent = span.closest('div.row');
+                                                        if (parent) {
+                                                            const nearbyButtons = parent.querySelectorAll('a');
+                                                            for (const btn of nearbyButtons) {
+                                                                try {
+                                                                    console.log(`Clicking nearby button: ${btn.textContent}`);
+                                                                    btn.click();
+                                                                    clickedCount++;
+                                                                    await new Promise(r => setTimeout(r, 700));
+                                                                } catch (e) {
+                                                                    console.error(`Error clicking nearby button: ${e}`);
+                                                                }
+                                                            }
+                                                        }
+                                                    } catch (e) {
+                                                        console.error(`Error finding related button: ${e}`);
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Return results
+                                            return {clickedCount, captchaDetected: false};
+                                        } catch (e) {
+                                            console.error('Show button error:', e);
+                                            return {clickedCount: -1, error: e.toString()};
+                                        }
+                                    })();
+                                """,
+                                "returnByValue": True,
+                                "awaitPromise": True
+                            },
+                            "sessionId": session_id
+                        })
+                        
+                        # Wait for response
+                        show_button_result = None
+                        async for msg in ws:
+                            if msg.type == WSMsgType.TEXT:
+                                response = json.loads(msg.data)
+                                if "id" in response and response["id"] == 29:
+                                    if "result" in response and "result" in response["result"]:
+                                        show_button_result = response["result"]["result"].get("value", {})
+                                        logger.info(f"Show button click result: {show_button_result}")
+                                        
+                                        # If CAPTCHA was detected after clicking, try to solve it
+                                        if show_button_result.get("captchaDetected"):
+                                            logger.info("CAPTCHA detected after clicking Show buttons! Trying to solve...")
+                                            # Re-run CAPTCHA solving since it was detected during Show button clicks
+                                            await ws.send_json({
+                                                "id": 29.5,
+                                                "method": "Captcha.solve",
+                                                "params": {
+                                                    "detectTimeout": 30000  # 30 seconds timeout
+                                                },
+                                                "sessionId": session_id
+                                            })
+                                            
+                                            # Wait for CAPTCHA solve result
+                                            async for captcha_msg in ws:
+                                                if captcha_msg.type == WSMsgType.TEXT:
+                                                    captcha_response = json.loads(captcha_msg.data)
+                                                    if "id" in captcha_response and captcha_response["id"] == 29.5:
+                                                        if "result" in captcha_response and "status" in captcha_response["result"]:
+                                                            captcha_status = captcha_response["result"]["status"]
+                                                            logger.info(f"CAPTCHA solve status during Show clicks: {captcha_status}")
+                                                        break
+                                            
+                                            # Wait a bit then continue
+                                            await asyncio.sleep(2)
+                                    break
+                        
+                        # Wait a bit for content to appear after clicking
+                        await asyncio.sleep(2)
+                        
                         # Click the age verification button if present
                         await ws.send_json({
                             "id": 30,
@@ -510,48 +1001,8 @@ class TrystScraper:
                         # Wait a bit for any redirects or further page loads
                         await asyncio.sleep(1)
                         
-                        # Click all "Show" buttons
-                        await ws.send_json({
-                            "id": 31,
-                            "method": "Runtime.evaluate",
-                            "params": {
-                                "expression": """
-                                    (async function() {
-                                        try {
-                                            // Find all Show buttons
-                                            const showButtons = document.querySelectorAll('a[data-action*="unobfuscate-details#revealUnobfuscatedContent"]');
-                                            console.log('Found ' + showButtons.length + ' Show buttons');
-                                            
-                                            // Click each button and wait briefly
-                                            for (const btn of showButtons) {
-                                                console.log('Clicking button: ' + btn.innerText);
-                                                btn.click();
-                                                // Wait for content to load
-                                                await new Promise(r => setTimeout(r, 500));
-                                            }
-                                            return showButtons.length;
-                                        } catch (e) {
-                                            console.error('Show button error:', e);
-                                            return -1;
-                                        }
-                                    })();
-                                """,
-                                "returnByValue": True,
-                                "awaitPromise": True
-                            },
-                            "sessionId": session_id
-                        })
-                        
-                        # Wait for response
-                        show_buttons_count = 0
-                        async for msg in ws:
-                            if msg.type == WSMsgType.TEXT:
-                                response = json.loads(msg.data)
-                                if "id" in response and response["id"] == 31:
-                                    if "result" in response and "result" in response["result"]:
-                                        show_buttons_count = response["result"]["result"].get("value", 0)
-                                        logger.debug(f"Clicked {show_buttons_count} Show buttons")
-                                    break
+                        # Note: Show buttons are already clicked in the improved implementation above, 
+                        # so we don't need to click them again here.
                         
                         # Wait a bit more for any content to load
                         await asyncio.sleep(2)

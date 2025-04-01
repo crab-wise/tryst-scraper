@@ -74,9 +74,13 @@ from profile_finder import (
 )
 
 # Bright Data Web Unlocker API configuration
-BRIGHT_DATA_API_TOKEN = "7790cf0b2613fd83bfc7205d35cb1eb449b437602863b8dad23ceb67a2cb5fd4"
-BRIGHT_DATA_ZONE = "web_unlocker1"
+# Using Direct API access with the correct API key
+BRIGHT_DATA_API_TOKEN = "d18fb294-7a56-4008-a6e9-6ce88198cdaf"  # Correct API key
+BRIGHT_DATA_ZONE = "web_unlocker1"  # Web Unlocker zone name
 BRIGHT_DATA_API_URL = "https://api.brightdata.com/request"
+
+# For debugging during initial setup
+BRIGHT_DATA_DEBUG = True
 
 def fetch_with_bright_data(url):
     """
@@ -107,12 +111,64 @@ def fetch_with_bright_data(url):
         "Authorization": f"Bearer {BRIGHT_DATA_API_TOKEN}"
     }
     
-    # Prepare the payload
+    # Prepare payload with browser rendering enabled
+    # This is critical for JavaScript execution, but we need to keep it simple
+    # to avoid validation errors
     payload = {
         "zone": BRIGHT_DATA_ZONE,
         "url": url,
-        "format": "raw"  # Get raw HTML response
+        "format": "raw",     # Get raw HTML response
+        "render": True       # Enable browser rendering for JavaScript execution
     }
+    
+    if BRIGHT_DATA_DEBUG:
+        print(f"DEBUG: Using API token: {BRIGHT_DATA_API_TOKEN[:5]}...{BRIGHT_DATA_API_TOKEN[-5:]}")
+        print(f"DEBUG: Zone name: {BRIGHT_DATA_ZONE}")
+        print(f"DEBUG: API URL: {BRIGHT_DATA_API_URL}")
+        print(f"DEBUG: Headers: {json.dumps(headers)}")
+        print(f"DEBUG: Payload: {json.dumps(payload)}")
+    
+    # Try with curl command first for debugging
+    if BRIGHT_DATA_DEBUG:
+        import subprocess
+        import shlex
+        
+        # Create a simplified payload for curl to avoid escaping issues
+        curl_payload = {
+            "zone": BRIGHT_DATA_ZONE,
+            "url": url,
+            "format": "raw",
+            "render": True
+        }
+        
+        curl_cmd = f"""
+        curl -v '{BRIGHT_DATA_API_URL}' \\
+        -H 'Content-Type: application/json' \\
+        -H 'Authorization: Bearer {BRIGHT_DATA_API_TOKEN}' \\
+        -d '{json.dumps(curl_payload)}'
+        """
+        print(f"DEBUG: Testing with curl command:")
+        print(curl_cmd)
+        
+        try:
+            # Execute the command
+            process = subprocess.Popen(
+                shlex.split(curl_cmd.strip()),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = process.communicate(timeout=60)
+            
+            print(f"DEBUG: Curl command exit code: {process.returncode}")
+            print(f"DEBUG: Curl stderr (should include request details):")
+            print(stderr.decode('utf-8'))
+            
+            if process.returncode == 0:
+                print(f"DEBUG: Curl command succeeded")
+            else:
+                print(f"DEBUG: Curl command failed")
+        except Exception as e:
+            print(f"DEBUG: Error executing curl command: {e}")
     
     # Track timing
     start_time = time.time()
@@ -123,7 +179,7 @@ def fetch_with_bright_data(url):
             BRIGHT_DATA_API_URL,
             headers=headers,
             json=payload,
-            timeout=60  # Increased timeout for Bright Data processing
+            timeout=120  # Increased timeout for Bright Data processing with rendering
         )
         
         # Log completion time
@@ -135,7 +191,16 @@ def fetch_with_bright_data(url):
             # Get the HTML content
             html_content = response.text
             
-            # Check if there are error indicators in the content
+            # Print a small sample of the content for debugging
+            content_sample = html_content[:200] + "..." if len(html_content) > 200 else html_content
+            print(f"Sample of response content: {content_sample}")
+            
+            # Check if there are auth errors in the response
+            if "Authentication failed" in html_content or "Auth failed" in html_content:
+                print("⚠️ Bright Data request returned authentication error")
+                return False, "Authentication failed - check your API token and zone"
+            
+            # Check for rate limiting errors
             if "HTTP ERROR 440" in html_content:
                 print("⚠️ Bright Data request returned HTTP ERROR 440 (rate limited)")
                 return False, "HTTP ERROR 440 - Rate limited"
@@ -153,6 +218,44 @@ def fetch_with_bright_data(url):
             # Log the error
             print(f"❌ Bright Data API error: {response.status_code}")
             print(f"Response: {response.text}")
+            
+            # Check for authentication errors
+            if response.status_code in (401, 407):
+                error_msg = "Authentication failed - check your API token and zone"
+                print(f"⚠️ {error_msg}")
+                return False, f"API Error: {response.status_code} - {error_msg}"
+            
+            # If this is a validation error, simplify and retry
+            if response.status_code == 400 and "validation" in response.text:
+                print("Validation error received, retrying with simplified payload...")
+                
+                # Simplify payload to just the essential parameters
+                simplified_payload = {
+                    "zone": BRIGHT_DATA_ZONE,
+                    "url": url,
+                    "format": "raw",
+                    "render": True
+                }
+                
+                # Retry with simplified payload
+                print(f"Retrying with simplified payload: {json.dumps(simplified_payload)}")
+                
+                retry_response = requests.post(
+                    BRIGHT_DATA_API_URL,
+                    headers=headers,
+                    json=simplified_payload,
+                    timeout=120
+                )
+                
+                if retry_response.status_code == 200:
+                    html_content = retry_response.text
+                    content_sample = html_content[:200] + "..." if len(html_content) > 200 else html_content
+                    print(f"Retry succeeded! Sample of response content: {content_sample}")
+                    return True, html_content
+                else:
+                    print(f"Retry failed with status code: {retry_response.status_code}")
+                    print(f"Retry response: {retry_response.text}")
+                    
             return False, f"API Error: {response.status_code} - {response.text}"
             
     except Exception as e:
@@ -1287,6 +1390,10 @@ def scrape_profile_with_bright_data(url):
     """
     Scrape a profile using Bright Data's Web Unlocker API.
     This approach avoids the need for a local browser and handles all CAPTCHAs and rate limiting.
+    
+    Using the render=true parameter automatically renders the page using a headless browser,
+    which should execute most JavaScript on the page, but we'll need to be more thorough
+    to find any hidden contact information.
     """
     import time
     from bs4 import BeautifulSoup
@@ -1313,12 +1420,18 @@ def scrape_profile_with_bright_data(url):
         "telegram": None
     }
     
-    # Fetch page content using Bright Data API
+    # Fetch page content using Bright Data API with browser rendering enabled
     success, html_content = fetch_with_bright_data(url)
     
     if not success:
         print(f"❌ Failed to fetch profile page: {html_content}")
         data["_error"] = html_content
+        return data
+        
+    # Check for authentication errors in the HTML
+    if "Authentication failed" in html_content or "Auth failed" in html_content:
+        print("⚠️ Authentication error in Bright Data response")
+        data["_error"] = "Authentication failed - check API token and zone"
         return data
     
     # Parse HTML with BeautifulSoup for easier data extraction
@@ -1326,18 +1439,27 @@ def scrape_profile_with_bright_data(url):
     
     # Extract profile name
     try:
-        # Try to find profile name in h1/h2 elements
-        name_element = soup.select_one('h1, h2, h3')
-        if name_element and name_element.text.strip():
-            data["name"] = name_element.text.strip()
-            print(f"✅ Found profile name: {data['name']}")
+        # Try to find profile name in h1/h2/h3 elements
+        for selector in ['h1.fs-3', 'h1', 'h2', 'h3']:
+            name_element = soup.select_one(selector)
+            if name_element and name_element.text.strip():
+                data["name"] = name_element.text.strip()
+                print(f"✅ Found profile name: {data['name']}")
+                break
     except Exception as e:
         print(f"Error extracting profile name: {e}")
+    
+    # Check if we have the contact info section
+    contact_section = soup.select_one("ul.list-style-none.bg-light.p-3.rounded")
+    if not contact_section:
+        print("⚠️ Warning: Contact information section not found")
     
     # Extract contact links
     try:
         # Find all contact information rows
         contact_rows = soup.select("ul.list-style-none.bg-light.p-3.rounded div.row.justify-content-between")
+        
+        print(f"Found {len(contact_rows)} contact information rows")
         
         for row in contact_rows:
             try:
@@ -1353,21 +1475,30 @@ def scrape_profile_with_bright_data(url):
                 if "formerly twitter" in label:
                     label = "twitter"
                 
+                print(f"Processing contact row labeled: '{label}'")
+                
                 # Extract value from visible elements or links
                 value = None
                 
-                # First check for visible text that's not hidden
+                # First check for revealed output spans
                 span = value_element.select_one("span[data-unobfuscate-details-target='output']")
-                if span and "●" not in span.text:
-                    value = span.text.strip()
+                if span:
+                    span_text = span.text.strip()
+                    # Filter out hidden content with dots (●)
+                    if "●" not in span_text and span_text:
+                        value = span_text
+                        print(f"  Found value in span: {value}")
                 
                 # If no value found yet, look for links for social media
                 if not value:
                     link = value_element.select_one("a")
                     if link and not label.startswith(('email', 'phone', 'mobile', 'whatsapp')):
-                        value = link.get('href')
+                        href = link.get('href')
+                        if href and not href.startswith('javascript:'):
+                            value = href
+                            print(f"  Found value in link: {value}")
                 
-                # Map to our data structure if label matches
+                # Map to our data structure if label matches and value found
                 if value:
                     field_mapping = {
                         "email": "email",
@@ -1390,9 +1521,27 @@ def scrape_profile_with_bright_data(url):
                             data[field] = value
                             print(f"✅ Found {field}: {value}")
                             break
+                else:
+                    print(f"  No value found for {label}")
                     
             except Exception as e:
                 print(f"Error processing contact row: {e}")
+    
+        # Check if we still have any "Show" buttons - with render=true, these should
+        # have been clicked by the browser rendering, but we should check
+        show_buttons = soup.select("a[data-action*='unobfuscate-details#revealUnobfuscatedContent']")
+        if show_buttons:
+            print(f"⚠️ Warning: Found {len(show_buttons)} 'Show' buttons that were not clicked")
+            
+            # Debug what contact fields still have 'Show' buttons
+            for button in show_buttons:
+                # Try to find the parent row to get the label
+                parent_row = button.find_parent("div", class_="row")
+                if parent_row:
+                    label_div = parent_row.select_one("div.col-auto.fw-bold")
+                    if label_div:
+                        label = label_div.text.strip()
+                        print(f"  'Show' button found for field: '{label}'")
     
         # As fallback, scan for social media links throughout the page
         for platform, field in [
@@ -1402,17 +1551,46 @@ def scrape_profile_with_bright_data(url):
             ("instagram.com", "instagram"),
             ("fansly.com", "fansly"),
             ("linktree", "linktree"),
+            ("linktr.ee", "linktree"),
             ("snapchat.com", "snapchat"),
             ("t.me", "telegram")
         ]:
             if not data[field]:  # Only look if we didn't already find it
                 links = soup.select(f"a[href*='{platform}']")
                 if links:
-                    data[field] = links[0].get('href')
-                    print(f"✅ Found {field} (fallback method): {data[field]}")
+                    href = links[0].get('href')
+                    if href:
+                        # Fix doubled URLs like https://onlyfans.com/https://onlyfans.com/username
+                        if href.count(platform) > 1:
+                            # Extract the actual username from doubled URL
+                            parts = href.split(platform)
+                            if len(parts) > 1:
+                                fixed_url = f"https://{platform}{parts[-1]}"
+                                data[field] = fixed_url
+                                print(f"✅ Found {field} (fallback method, fixed doubled URL): {fixed_url}")
+                        else:
+                            data[field] = href
+                            print(f"✅ Found {field} (fallback method): {href}")
                     
     except Exception as e:
         print(f"Error extracting contact information: {e}")
+    
+    # Check if we found any useful contact information
+    has_contact = False
+    for field in ["email", "phone", "mobile", "whatsapp", "onlyfans", "twitter", "instagram", "website"]:
+        if data[field]:
+            has_contact = True
+            break
+    
+    if not has_contact:
+        print("⚠️ Warning: No contact information found in this profile")
+        # We got a response but found no contact info - try to save the HTML for debugging
+        if BRIGHT_DATA_DEBUG:
+            import random
+            debug_filename = f"debug_no_contact_{random.randint(1000, 9999)}.html"
+            with open(debug_filename, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            print(f"Saved HTML content to {debug_filename} for debugging")
     
     return data
 

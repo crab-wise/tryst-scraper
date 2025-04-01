@@ -1,81 +1,108 @@
-# Tryst-Scraper Project
+# Tryst.link Scraper Implementation Plan
 
-## Current Focus
-**Currently working with: Profile Scraper (`profile_scraper.py`)**
+## Architecture Overview
 
-The Profile Scraper is responsible for extracting detailed information from individual profiles, such as email addresses, websites, and social media links. This is the second step in the two-step process:
+This document outlines the implementation plan for a high-performance scraper for Tryst.link escort profiles. The primary goals are:
 
-1. First, `profile_finder.py` was run to collect profile URLs, which are saved to `profile_urls.txt`
-2. Now, `profile_scraper.py` reads these URLs from `profile_urls.txt`, visits each profile page, extracts the relevant information, and saves it to a CSV file (`profile_data.csv`)
+1. Reliably extract contact information from 30,000+ profiles
+2. Handle rate limiting, CAPTCHAs, and hidden content ("Show" buttons)
+3. Process scraping at scale with parallelization
+4. Ensure high success rates (95%+)
 
-## Overview
-The Tryst-Scraper is a Python-based web scraping tool designed to extract profile information from Tryst.link, an adult services directory. The scraper is engineered to handle CAPTCHA challenges, age verification prompts, and extract contact information from profiles, including hidden emails that require user interaction to reveal.
+## Core Technology Stack
 
-## Project Structure
-The project follows a two-phase approach to scraping:
+- **Bright Data Scraping Browser**: Primary data extraction technology
+- **Python (3.8+)**: Core programming language
+- **ThreadPoolExecutor/asyncio**: Concurrency management
+- **pytest**: Testing framework
+- **JSON/CSV**: Data storage formats
 
-1. **Profile Finder** (`profile_finder.py`): Collects all profile URLs from search pages
-2. **Profile Scraper** (`profile_scraper.py`): Extracts detailed information from individual profiles
+## Implementation Phases
 
-## Main Components
+### Phase 1: Core Scraping Browser Integration
+- Set up Bright Data Scraping Browser connection
+- Create basic profile extraction function
+- Implement "Show" button clicking logic
+- Add error handling and retries
 
-### 1. Profile Finder
-This component navigates through search result pages to collect profile URLs.
+### Phase 2: Scraper Optimization
+- Add batch processing
+- Implement adaptive concurrency
+- Optimize data transfer and memory usage
+- Add data validation and cleaning
 
-Key functions:
-- `load_all_profiles`: Handles pagination through search results
-- `handle_captcha`: Detects and solves CAPTCHAs using third-party services
-- `handle_age_verification`: Bypasses age verification prompts
-- `extract_profile_links`: Collects profile URLs from pages
-- `save_urls`: Stores collected URLs to a text file
+### Phase 3: Scalable Processing Pipeline
+- Create a job management system
+- Add logging and monitoring
+- Implement checkpointing
+- Design results storage and organization
 
-### 2. Profile Scraper
-This component visits individual profile pages and extracts contact information.
+## Detailed Implementation Plan
 
-Key functions:
-- `scrape_profile`: Extracts data from a profile page
-- `reveal_email`: Clicks "Show Email" and waits for unobfuscation
-- `save_to_csv`: Stores extracted data in CSV format
-- `scrape_from_url_file`: Processes multiple profiles from a file
+### Phase 1: Core Scraping Browser Integration
 
-### 3. CAPTCHA Handling System
-The scraper includes a robust CAPTCHA solving system that:
-- Uses 2Captcha API for automated solving
-- Takes screenshots of CAPTCHA challenges
-- Falls back to manual solving when the automated method fails
+1. **Scraping Browser Configuration**
+   - Connect to Bright Data Scraping Browser
+   - Set up browser automation capabilities
+   - Configure headless browser session management
 
-### 4. Utilities
-- `initialize_driver`: Sets up Chrome WebDriver with anti-detection measures
-- `load_scraped_urls`: Tracks already processed URLs to avoid duplicates
+2. **Profile Extraction Logic**
+   - Navigate to profile page
+   - Handle age verification
+   - Solve CAPTCHAs (handled by Scraping Browser)
+   - Locate and click "Show" buttons
+   - Extract revealed contact information
 
-## Dependencies
-- Selenium (WebDriver for browser automation)
-- Requests (HTTP library)
-- ChromeDriver (for Chrome browser automation)
-- Pillow (for image processing related to CAPTCHAs)
+3. **Data Extraction**
+   - Extract profile name, location, and bio
+   - Extract contact methods (email, phone, etc.)
+   - Extract social media links
+   - Clean and validate extracted data
 
-## Data Collection
-The scraper collects the following information:
-- Profile URL
-- Name
-- Email address (revealed by interacting with the page)
-- Website links
-- OnlyFans links
-- Twitter/X accounts
-- Instagram accounts
+### Phase 2: Scraper Optimization
 
-Data is saved to CSV format for further processing.
+1. **Performance Optimization**
+   - Optimize browser settings for speed
+   - Implement request pooling
+   - Add caching for already processed profiles
 
-## Security and Anti-Detection
-The scraper includes several measures to avoid detection:
-- Randomized delays between requests
-- User-agent spoofing
-- Disabling WebDriver flags that could be detected
-- Tracking scraped URLs to avoid duplicates
+2. **Error Handling**
+   - Create exponential backoff retry mechanism
+   - Handle specific error types (network, CAPTCHA, parsing)
+   - Implement graceful degradation for partial data
 
-## Usage
-The tool is designed to be used sequentially:
-1. Run `profile_finder.py` to collect URLs
-2. Run `profile_scraper.py` to extract data from those URLs
+3. **Data Quality**
+   - Validate extracted data structure
+   - Fix common issues (doubled URLs)
+   - Normalize contact information formats
 
-Additional options for the profile scraper allow for scraping individual URLs, limiting batch size, or using custom URL files.
+### Phase 3: Scalable Processing Pipeline
+
+1. **Job Orchestration**
+   - Create batch processing system
+   - Implement resumable jobs
+   - Add progress tracking
+   - Design job distribution across workers
+
+2. **Monitoring and Analytics**
+   - Track success/failure rates
+   - Measure throughput and performance
+   - Create alerting for issues
+
+3. **Storage and Output**
+   - Design efficient data storage format
+   - Implement incremental results saving
+   - Add data export capabilities (CSV, JSON)
+
+## Implementation Timeline
+
+- **Phase 1**: 1-2 days - Core scraping functionality
+- **Phase 2**: 1-2 days - Performance optimization and error handling
+- **Phase 3**: 1 day - Scaling and production readiness
+
+## Success Metrics
+
+- 95%+ success rate for profile extraction
+- Capable of processing 30k profiles in <24 hours
+- Reliable extraction of hidden contact information
+- Minimal maintenance requirements

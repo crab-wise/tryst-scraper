@@ -1,138 +1,127 @@
-# Tryst.link Scraper
+# Tryst.link Profile Scraper
 
-A clean, minimal, and reliable scraper for Tryst.link profiles that can handle CAPTCHAs, reveal hidden information, and save data to CSV. The scraper is split into two parts for better flexibility and reliability.
+A high-performance web scraper for extracting contact information from Tryst.link escort profiles, designed to handle rate limiting, CAPTCHAs, and "Show" buttons that hide contact information.
 
 ## Features
 
-- Two-part scraping process for improved flexibility:
-  1. Profile Finder: Collects all profile URLs from search pages
-  2. Profile Scraper: Extracts detailed information from individual profiles
-- Handles text-based image CAPTCHAs using:
-  - 2Captcha as the automated service
-  - Manual solving as fallback
-- Handles age verification prompts automatically
-- Reveals and extracts hidden emails
-- Collects contact information:
-  - Emails (hidden behind "Show Email" button)
-  - Website links
-  - OnlyFans links
-  - Twitter/X accounts
-  - Instagram accounts
-- Saves data to CSV
-- Tracks scraped URLs to avoid duplicates
-- Handles interruptions gracefully
-- Error handling to prevent crashes
+- **Efficient Data Extraction**: Automatically extracts name, email, phone, and social media links
+- **Click "Show" Buttons**: Automatically reveals hidden contact information
+- **Parallel Processing**: Scales to handle 30,000+ profiles with concurrent workers
+- **CAPTCHA Handling**: Uses Bright Data Scraping Browser to automatically solve CAPTCHAs
+- **Retry Mechanism**: Implements exponential backoff for failed requests
+- **Resumable Jobs**: Tracks progress and can continue from previous runs
+- **Detailed Logging**: Provides comprehensive logs and statistics
 
 ## Requirements
 
-- Python 3.6+
-- Chrome browser
-- 2Captcha API key
+- Python 3.8+
+- Bright Data account with Scraping Browser access
+- Required Python packages listed in `requirements.txt`
 
 ## Installation
 
-1. Clone this repository:
-   ```bash
+1. Clone the repository:
+   ```
    git clone https://github.com/yourusername/tryst-scraper.git
    cd tryst-scraper
    ```
 
 2. Install dependencies:
-   ```bash
+   ```
    pip install -r requirements.txt
    ```
 
-3. Configure the scraper:
-   - Open `profile_finder.py` and add your API key:
-     ```python
-     TWOCAPTCHA_API_KEY = "YOUR_2CAPTCHA_API_KEY_HERE"
-     ```
-   - If you don't have an API key, the scraper will fall back to manual CAPTCHA solving
+3. Set up Bright Data credentials as environment variables:
+   ```
+   export BRIGHT_DATA_CUSTOMER_ID="your-customer-id"
+   export BRIGHT_DATA_ZONE="scraping_browser1"
+   export BRIGHT_DATA_PASSWORD="your-zone-password"
+   ```
 
 ## Usage
 
-### Step 1: Find Profile URLs
+### Basic Usage
 
-First, run the profile finder to collect all profile URLs:
-
-```bash
-python profile_finder.py
+```
+python scraper.py --urls profile_urls.txt --output profile_data.csv
 ```
 
-This will:
-- Load the search page
-- Solve any CAPTCHAs that appear
-- Scroll through all results to load all profiles
-- Save profile URLs to `profile_urls.txt`
+### Command Line Options
 
-### Step 2: Scrape Individual Profiles
+- `--urls`, `-u`: File containing profile URLs to scrape (default: profile_urls.txt)
+- `--output`, `-o`: Output CSV file for scraped data (default: profile_data.csv)
+- `--tracked`, `-t`: File to track scraped URLs (default: scraped_urls.txt)
+- `--batch-size`, `-b`: Number of URLs to process in each batch (default: 100)
+- `--workers`, `-w`: Maximum number of concurrent workers (default: 20)
+- `--debug`, `-d`: Enable debug logging
+- `--test`: Run in test mode (only process 5 URLs)
+- `--continue`: Continue from last run
 
-Once you have collected profile URLs, use the profile scraper to extract detailed information:
+### Example Usages
 
-```bash
-python profile_scraper.py
+Test with a small batch:
+```
+python scraper.py --test --debug
 ```
 
-This will:
-- Read URLs from `profile_urls.txt`
-- Visit each profile page
-- Extract hidden email addresses and other contact information
-- Save data to `profile_data.csv`
-- Track scraped URLs in `scraped_urls.txt` to avoid duplicates
-
-### Additional Options for Profile Scraper
-
-You can customize the profile scraper with command-line options:
-
-```bash
-# Scrape a single specific profile URL
-python profile_scraper.py --url=https://tryst.link/escort/example
-
-# Use a different file for profile URLs
-python profile_scraper.py --file=my_urls.txt
-
-# Limit the number of profiles to scrape (useful for testing)
-python profile_scraper.py --limit=5
-
-# Show help
-python profile_scraper.py --help
+Run with optimized settings for large jobs:
+```
+python scraper.py --batch-size 200 --workers 50
 ```
 
-## Customization
-
-### Running in Headless Mode
-
-To run in headless mode (no visible browser), modify the `initialize_driver` call in either script:
-
-```python
-driver = initialize_driver(headless=True)
+Continue a previously interrupted job:
+```
+python scraper.py --continue
 ```
 
-### Adjusting CAPTCHA Solving
+## Output Format
 
-The scraper is set up to handle the text-based image CAPTCHAs on Tryst.link. It will:
-1. First attempt to solve using Capsolver's ImageToText API
-2. If automated solving fails, fall back to manual intervention
+The scraper creates a CSV file with the following columns:
 
-## CAPTCHA Handling
+- Profile URL
+- Name
+- Email
+- Phone
+- Mobile
+- WhatsApp
+- Linktree
+- Website
+- OnlyFans
+- Fansly
+- Twitter
+- Instagram
+- Snapchat
+- Telegram
+- Process Time
+- Success (Yes/No)
 
-The scraper uses a specialized approach for handling Tryst.link's text-based CAPTCHA:
-1. Detects the "You're Almost There" page
-2. Takes a screenshot of the CAPTCHA
-3. Uses 2Captcha's ImageToText API for automated solving
-4. Falls back to manual intervention if automated service fails
+## Testing
 
-## Notes
+Run the test suite:
+```
+pytest test_scraper.py
+```
 
-- The scripts are set to run with a visible browser by default to allow for manual CAPTCHA solving if needed
-- Random delays between profile scrapes help avoid being blocked
-- If the site's structure changes, you may need to update the selectors in the `scrape_profile()` function
-- The scraper respects the site's structure and doesn't attempt to bypass legitimately hidden information
+## Architecture
+
+The scraper uses a three-tier architecture:
+
+1. **Data Extraction**: Uses Bright Data Scraping Browser to render pages, click buttons, and extract data
+2. **Parallel Processing**: Implements asyncio for concurrent requests
+3. **Data Storage**: Saves results to CSV with progress tracking
+
+For detailed implementation information, see `Claude.md`.
+
+## Performance Considerations
+
+- **Concurrency**: The default 20 workers is a good starting point, but you may increase to 50+ for faster processing
+- **Batch Size**: Larger batches (200-500) improve efficiency but use more memory
+- **Rate Limiting**: The scraper handles rate limiting automatically via Bright Data's infrastructure
 
 ## License
 
 MIT
 
-## Disclaimer
+## Acknowledgments
 
-This tool is for educational purposes only. Use responsibly and in accordance with Tryst.link's terms of service.
+This project was designed with help from Claude, an AI assistant by Anthropic.
